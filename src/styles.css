@@ -1,0 +1,215 @@
+/* Snake Arena's own identity: a dark arena, phosphor green, amber food.
+   No borrowed assets, icons or fonts — system font stack and plain CSS
+   shapes only, so the deployed app needs nothing but what it ships. */
+
+:root {
+  color-scheme: dark;
+  --bg: #0b0f14;
+  --panel: #121820;
+  --border: rgba(255, 255, 255, 0.08);
+  --text: #e6f1ea;
+  --muted: #8ba396;
+  --accent: #39ff8f;
+  --accent-dim: #1fae5f;
+  --warn: #ffb454;
+  --danger: #ff5c5c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 1.5rem;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  line-height: 1.6;
+}
+
+main {
+  max-width: 48rem;
+  margin: 0 auto;
+}
+
+h1,
+h2,
+h3 {
+  letter-spacing: 0.02em;
+}
+
+a {
+  color: var(--accent);
+}
+
+nav[aria-label="site"] {
+  display: flex;
+  gap: 1.25rem;
+  margin-bottom: 1.5rem;
+  font-size: 0.9rem;
+}
+
+nav[aria-label="site"] a {
+  text-decoration: none;
+  color: var(--muted);
+}
+
+nav[aria-label="site"] a:hover,
+nav[aria-label="site"] a:focus-visible {
+  color: var(--accent);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+}
+
+.button {
+  display: inline-block;
+  padding: 0.65rem 1.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--accent-dim);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button:hover,
+.button:focus-visible {
+  background: rgba(57, 255, 143, 0.1);
+}
+
+.button.primary {
+  background: var(--accent);
+  color: #06120b;
+  border-color: var(--accent);
+}
+
+.button.primary:hover,
+.button.primary:focus-visible {
+  background: #4dffa0;
+}
+
+/* --- play screen ---------------------------------------------------- */
+
+.arena-layout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.5rem;
+  align-items: flex-start;
+}
+
+.arena-board {
+  flex: 0 0 auto;
+}
+
+#board {
+  display: block;
+  width: min(100%, 480px);
+  height: auto;
+  aspect-ratio: 1 / 1;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.hud {
+  flex: 1 1 14rem;
+  min-width: 12rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.hud-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.hud-row strong {
+  color: var(--text);
+  font-size: 1.1rem;
+}
+
+#status-banner {
+  font-weight: 600;
+}
+
+#status-banner[data-status="ready"] {
+  color: var(--warn);
+}
+
+#status-banner[data-status="playing"] {
+  color: var(--accent);
+}
+
+#status-banner[data-status="over"] {
+  color: var(--danger);
+}
+
+.controls-legend {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.controls-legend kbd {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 0.25rem;
+  padding: 0.05rem 0.4rem;
+  font: inherit;
+}
+
+#game-over-panel[hidden] {
+  display: none;
+}
+
+/* --- leaderboard ------------------------------------------------------ */
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.9rem;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  body {
+    padding: 1rem;
+  }
+
+  .arena-layout {
+    flex-direction: column;
+  }
+}

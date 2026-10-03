@@ -1,0 +1,66 @@
+---
+import { listLeaderboard } from "../lib/db";
+import "../styles.css";
+
+// Server-rendered from the database on every request — a refresh re-queries
+// rather than reading anything cached in the page or the browser, which is
+// what "survives a refresh" actually requires.
+const entries = listLeaderboard(10);
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+---
+
+<!doctype html>
+<html lang="en-AU">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Leaderboard — Snake Arena</title>
+  </head>
+  <body>
+    <nav aria-label="site">
+      <a href="/">Snake Arena</a>
+      <a href="/play/">Play</a>
+      <a href="/leaderboard/">Leaderboard</a>
+      <a href="/readme/">About</a>
+    </nav>
+    <main>
+      <h1>Leaderboard</h1>
+      <p>Top {entries.length > 0 ? entries.length : "0"} runs, highest score first.</p>
+      {
+        entries.length === 0 ? (
+          <p class="panel">No games finished yet — <a href="/play/">play one</a>.</p>
+        ) : (
+          <table>
+            <caption class="sr-only">Snake Arena leaderboard</caption>
+            <thead>
+              <tr>
+                <th scope="col">#</th>
+                <th scope="col">Player</th>
+                <th scope="col">Score</th>
+                <th scope="col">Survived</th>
+                <th scope="col">Finished</th>
+              </tr>
+            </thead>
+            <tbody>
+              {entries.map((entry, index) => (
+                <tr>
+                  <td>{index + 1}</td>
+                  <td>{entry.displayName}</td>
+                  <td>{entry.score}</td>
+                  <td>{formatDuration(entry.survivalTimeMs)}</td>
+                  <td>{new Date(entry.finishedAt).toLocaleString("en-AU")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )
+      }
+    </main>
+  </body>
+</html>
