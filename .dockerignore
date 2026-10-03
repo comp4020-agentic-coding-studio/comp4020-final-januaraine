@@ -4,6 +4,8 @@
 .git
 node_modules
 dist
+.astro
+.data
 *.log
 .env
 .env.*

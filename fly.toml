@@ -25,6 +25,9 @@ dockerfile = "Dockerfile"
 
 [env]
 PORT = "8080"
+# The SQLite file lives on the volume mounted below, so state (players,
+# games) survives a reload, a restart and a redeploy.
+DATABASE_PATH = "/data/app.db"
 
 [http_service]
 internal_port = 8080
