@@ -1,0 +1,22 @@
+// Shared between the client's own loop (C8) and, eventually, the
+// authoritative server loop (C9) — both have to agree on these numbers for
+// the server's result validation (validate.ts) to mean anything. A single
+// source of truth here is what makes "move the loop server-side" a swap of
+// where tick() runs, not a redesign of what it computes.
+
+// Board is gridSize × gridSize cells.
+export const GRID_SIZE = 20;
+
+// One tick is one cell-step of the snake. Fixed-rate, not frame-rate: this is
+// what lets survival time be measured in ticks (an integer, replayable count)
+// rather than wall-clock milliseconds a client could misreport.
+export const TICK_MS = 120;
+
+// Flat award per food — score is always an exact multiple of this, which is
+// part of what the server checks a submitted result against.
+export const POINTS_PER_FOOD = 10;
+
+// A generous ceiling on a single reported game, in ticks — long enough for
+// any real match, short enough to keep a hand-built request from claiming a
+// multi-day survival time. (~1 hour at TICK_MS=120.)
+export const MAX_TICKS = 30_000;
