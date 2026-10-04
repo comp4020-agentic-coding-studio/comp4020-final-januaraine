@@ -7,9 +7,9 @@ import { getExistingPlayer } from "../../lib/session";
 // play.astro's client script (re-fetched after a game ends, so a new result
 // shows up without a full page reload).
 //
-// Optional query filters — player, score, score range, date range — are all
+// Optional query filters — player, date range, sort direction — are all
 // validated by the same parseLeaderboardQuery used by leaderboard.astro, so
-// a malformed value (e.g. minScore=abc) is rejected the same way in both
+// a malformed value (e.g. sort=banana) is rejected the same way in both
 // places instead of silently being ignored.
 export const GET: APIRoute = ({ request, cookies }) => {
   const parsed = parseLeaderboardQuery(new URL(request.url).searchParams);

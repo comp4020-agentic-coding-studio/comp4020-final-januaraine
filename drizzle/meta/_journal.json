@@ -15,6 +15,13 @@
       "when": 1791090844543,
       "tag": "0001_lean_talos",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791093469357,
+      "tag": "0002_square_iron_monger",
+      "breakpoints": true
     }
   ]
 }

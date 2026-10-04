@@ -43,7 +43,7 @@ export function recordGameResult(input: { playerId: number; score: number; ticks
   const survivalTimeMs = ticksToMs(input.ticks);
   const finishedAt = new Date();
   const startedAt = new Date(finishedAt.getTime() - survivalTimeMs);
-  const game = db
+  return db
     .insert(games)
     .values({
       playerId: input.playerId,
@@ -56,21 +56,24 @@ export function recordGameResult(input: { playerId: number; score: number; ticks
     })
     .returning()
     .get();
-
-  // Submitting a new result is an explicit opt back into the leaderboard,
-  // in case this player previously removed their entry (see
-  // hidePlayerFromLeaderboard below).
-  db.update(players).set({ hiddenFromLeaderboard: false }).where(eq(players.id, input.playerId)).run();
-
-  return game;
 }
 
-// Hides a player's leaderboard entry without touching their games rows —
-// the least-destructive reading of "remove my entry" that the current
-// schema supports. Cleared automatically the next time they submit a
-// result (see recordGameResult).
-export function hidePlayerFromLeaderboard(playerId: number): void {
-  db.update(players).set({ hiddenFromLeaderboard: true }).where(eq(players.id, playerId)).run();
+// Permanently erases a player's anonymous identity: every game row they
+// own, then the players row itself. "Remove my record" means this, not a
+// visibility flag — nothing here can be undone, and nothing is left behind
+// for a reused session token to reattach to (see session.ts's
+// getOrCreatePlayer: a token with no matching players row always mints a
+// fresh identity, which is what makes this deletion actually final rather
+// than just hidden).
+//
+// Wrapped in a transaction so a mid-delete failure can't leave games rows
+// pointing at a player that's already gone — better-sqlite3's driver runs
+// this as BEGIN/COMMIT, rolling back on any thrown error.
+export function deletePlayerPermanently(playerId: number): void {
+  db.transaction((tx) => {
+    tx.delete(games).where(eq(games.playerId, playerId)).run();
+    tx.delete(players).where(eq(players.id, playerId)).run();
+  });
 }
 
 export interface LeaderboardEntry {
@@ -85,16 +88,17 @@ export interface LeaderboardEntry {
   isMine: boolean;
 }
 
+export type LeaderboardSort = "asc" | "desc";
+
 export interface LeaderboardFilters {
   limit?: number;
   player?: string;
-  minScore?: number;
-  maxScore?: number;
-  exactScore?: number;
   /** Inclusive lower bound, compared lexically against the ISO finishedAt. */
   from?: string;
   /** Inclusive upper bound, compared lexically against the ISO finishedAt. */
   to?: string;
+  /** Order of the final, already-deduped player list. Default "desc". */
+  sort?: LeaderboardSort;
   currentPlayerId?: number | null;
 }
 
@@ -115,43 +119,61 @@ interface RankedRow {
 // anything left) and keeps only rank 1 per player. Drizzle's query builder
 // has no window-function support, hence the raw SQL rather than
 // .select()/.orderBy().
+//
+// That inner ranking is always highest-score-first, regardless of the
+// requested display sort: "personal best" means the same thing either way,
+// and `sort` only reorders the resulting one-row-per-player set, never
+// which run represents a player. The player/date filters narrow which runs
+// are even candidates for that per-player ranking, so filtering, dedupe and
+// sort stay in the one query instead of a partial frontend re-derivation.
 export function listLeaderboard(filters: LeaderboardFilters = {}): LeaderboardEntry[] {
   const limit = filters.limit ?? 10;
+  const sortDirection = filters.sort === "asc" ? sql`ASC` : sql`DESC`;
 
-  const conditions: SQL[] = [sql`rn = 1`, sql`hidden = 0`];
+  // Date filters narrow the candidate runs *before* ranking, not after:
+  // a player's displayed result must be their best run within the selected
+  // range, not their all-time best filtered out because it happened to
+  // fall outside it. Only rn=1 and the player-name filter apply after
+  // ranking, since neither changes which run counts as "this player's
+  // best" — they just decide whether that one resulting row is shown.
+  const candidateConditions: SQL[] = [];
+  if (filters.from !== undefined) candidateConditions.push(sql`g.finished_at >= ${filters.from}`);
+  if (filters.to !== undefined) candidateConditions.push(sql`g.finished_at <= ${filters.to}`);
+  const candidateWhere = candidateConditions.length > 0 ? sql.join(candidateConditions, sql` AND `) : sql`1 = 1`;
+
+  const conditions: SQL[] = [sql`rn = 1`];
   if (filters.player) {
     // Escape LIKE's own wildcards so a literal "%" or "_" in a search term
     // is matched literally, not treated as a pattern.
     const escaped = filters.player.replace(/[\\%_]/g, (char) => `\\${char}`);
     conditions.push(sql`displayName LIKE ${`%${escaped}%`} ESCAPE '\\' COLLATE NOCASE`);
   }
-  if (filters.exactScore !== undefined) conditions.push(sql`score = ${filters.exactScore}`);
-  if (filters.minScore !== undefined) conditions.push(sql`score >= ${filters.minScore}`);
-  if (filters.maxScore !== undefined) conditions.push(sql`score <= ${filters.maxScore}`);
-  if (filters.from !== undefined) conditions.push(sql`finishedAt >= ${filters.from}`);
-  if (filters.to !== undefined) conditions.push(sql`finishedAt <= ${filters.to}`);
 
   const rows = db.all<RankedRow>(sql`
-    WITH ranked AS (
-      SELECT
-        g.id AS gameId,
-        g.player_id AS playerId,
-        p.display_name AS displayName,
-        g.score AS score,
-        g.survival_time_ms AS survivalTimeMs,
-        g.finished_at AS finishedAt,
-        p.hidden_from_leaderboard AS hidden,
-        ROW_NUMBER() OVER (
-          PARTITION BY g.player_id
-          ORDER BY g.score DESC, g.finished_at ASC, g.id ASC
-        ) AS rn
+    WITH candidates AS (
+      SELECT g.id, g.player_id, g.score, g.survival_time_ms, g.finished_at
       FROM games g
-      JOIN players p ON p.id = g.player_id
+      WHERE ${candidateWhere}
+    ),
+    ranked AS (
+      SELECT
+        c.id AS gameId,
+        c.player_id AS playerId,
+        p.display_name AS displayName,
+        c.score AS score,
+        c.survival_time_ms AS survivalTimeMs,
+        c.finished_at AS finishedAt,
+        ROW_NUMBER() OVER (
+          PARTITION BY c.player_id
+          ORDER BY c.score DESC, c.finished_at ASC, c.id ASC
+        ) AS rn
+      FROM candidates c
+      JOIN players p ON p.id = c.player_id
     )
     SELECT gameId, playerId, displayName, score, survivalTimeMs, finishedAt
     FROM ranked
     WHERE ${sql.join(conditions, sql` AND `)}
-    ORDER BY score DESC, finishedAt ASC, gameId ASC
+    ORDER BY score ${sortDirection}, finishedAt ASC, gameId ASC
     LIMIT ${limit}
   `);
 
@@ -176,15 +198,12 @@ export interface InvalidLeaderboardQuery {
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
-function parseScoreParam(params: URLSearchParams, name: string, errors: string[]): number | undefined {
-  const raw = params.get(name);
-  if (raw === null || raw === "") return undefined;
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0) {
-    errors.push(`${name} must be a non-negative integer`);
-    return undefined;
-  }
-  return value;
+function parseSortParam(params: URLSearchParams, errors: string[]): LeaderboardSort {
+  const raw = params.get("sort");
+  if (raw === null || raw === "") return "desc";
+  if (raw === "asc" || raw === "desc") return raw;
+  errors.push('sort must be "asc" or "desc"');
+  return "desc";
 }
 
 // `from`/`to` are compared lexically against finishedAt, which is always
@@ -212,19 +231,14 @@ export function parseLeaderboardQuery(params: URLSearchParams): ParsedLeaderboar
   const errors: string[] = [];
 
   const player = params.get("player")?.trim().slice(0, 100) || undefined;
-  const exactScore = parseScoreParam(params, "score", errors);
-  const minScore = parseScoreParam(params, "minScore", errors);
-  const maxScore = parseScoreParam(params, "maxScore", errors);
   const from = parseDateParam(params, "from", errors);
   const to = parseDateParam(params, "to", errors);
+  const sort = parseSortParam(params, errors);
 
-  if (minScore !== undefined && maxScore !== undefined && minScore > maxScore) {
-    errors.push("minScore must not be greater than maxScore");
-  }
   if (from !== undefined && to !== undefined && from > to) {
     errors.push("from must not be after to");
   }
 
   if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, filters: { player, exactScore, minScore, maxScore, from, to } };
+  return { ok: true, filters: { player, from, to, sort } };
 }

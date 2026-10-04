@@ -211,7 +211,8 @@ nav[aria-label="site"] a:focus-visible {
   font-size: 0.75rem;
 }
 
-.filter-field input {
+.filter-field input,
+.filter-field select {
   font: inherit;
   color: var(--text);
   background: var(--panel);
@@ -221,7 +222,8 @@ nav[aria-label="site"] a:focus-visible {
   min-width: 0;
 }
 
-.filter-field input:focus-visible {
+.filter-field input:focus-visible,
+.filter-field select:focus-visible {
   outline: 2px solid var(--accent-dim);
   outline-offset: 1px;
 }
@@ -262,6 +264,26 @@ th {
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+/* Subtle enough not to compete with the table's own hierarchy — a tint, not
+   a border or a bold row — while still being the first thing a player's eye
+   catches when scanning for their own position. */
+tr.mine {
+  background: rgba(57, 255, 143, 0.07);
+}
+
+.you-badge {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 0.25rem;
+  background: var(--accent-dim);
+  color: #06120b;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
 }
 
 .sr-only {

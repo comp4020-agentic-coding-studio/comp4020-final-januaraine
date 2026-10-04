@@ -18,10 +18,6 @@ export const players = sqliteTable("players", {
   createdAt: text("created_at")
     .notNull()
     .default(sql`(datetime('now'))`),
-  // Set when the player removes their own leaderboard entry (see
-  // hidePlayerFromLeaderboard in db.ts) — their games rows are kept, not
-  // deleted, and the flag is cleared the next time they submit a result.
-  hiddenFromLeaderboard: int("hidden_from_leaderboard", { mode: "boolean" }).notNull().default(false),
 });
 
 export const games = sqliteTable("games", {

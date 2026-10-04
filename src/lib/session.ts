@@ -50,3 +50,14 @@ export function getExistingPlayer(cookies: AstroCookies): Player | null {
   if (!token) return null;
   return findPlayerByToken(token);
 }
+
+// Drops the session cookie outright, used after permanently deleting a
+// player's data so this browser doesn't keep presenting a token that no
+// longer matches any row. Belt and suspenders, not the actual guarantee:
+// even if a client ignored this and replayed the old cookie value anyway,
+// getOrCreatePlayer's findPlayerByToken lookup would come back empty (the
+// row is gone) and mint a brand-new identity regardless — deletion is final
+// because the row is gone, not because the cookie was cleared.
+export function clearSession(cookies: AstroCookies): void {
+  cookies.delete(SESSION_COOKIE, { path: "/" });
+}

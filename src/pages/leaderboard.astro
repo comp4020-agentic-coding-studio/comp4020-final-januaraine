@@ -14,7 +14,13 @@ const parsed = parseLeaderboardQuery(rawParams);
 const currentPlayer = getExistingPlayer(Astro.cookies);
 
 const fieldValue = (name: string): string => rawParams.get(name) ?? "";
-const hasFilters = ["player", "minScore", "maxScore", "from", "to"].some((name) => fieldValue(name) !== "");
+// Only player/from/to actually narrow the result set — sort just reorders
+// it — so only those three decide the empty-state wording below.
+const hasFilters = ["player", "from", "to"].some((name) => fieldValue(name) !== "");
+const sortValue = fieldValue("sort") === "asc" ? "asc" : "desc";
+// Anything set, sort included, is enough to show "Clear" — reset means back
+// to the plain default view.
+const hasAnyQueryParam = hasFilters || sortValue !== "desc";
 
 let entries: LeaderboardEntry[] = [];
 let errors: string[] = [];
@@ -52,10 +58,9 @@ const todayHref = `/leaderboard/?${todayParams.toString()}`;
 
 const activeFilters = [
   fieldValue("player") && `player contains "${fieldValue("player")}"`,
-  fieldValue("minScore") && `score ≥ ${fieldValue("minScore")}`,
-  fieldValue("maxScore") && `score ≤ ${fieldValue("maxScore")}`,
   fieldValue("from") && `finished on/after ${fieldValue("from")}`,
   fieldValue("to") && `finished on/before ${fieldValue("to")}`,
+  sortValue === "asc" && "lowest score first",
 ].filter((part): part is string => Boolean(part));
 ---
 
@@ -83,12 +88,11 @@ const activeFilters = [
           <input type="search" id="player" name="player" placeholder="e.g. 5D2C" value={fieldValue("player")} />
         </div>
         <div class="filter-field">
-          <label for="minScore">Min score</label>
-          <input type="number" id="minScore" name="minScore" min="0" inputmode="numeric" value={fieldValue("minScore")} />
-        </div>
-        <div class="filter-field">
-          <label for="maxScore">Max score</label>
-          <input type="number" id="maxScore" name="maxScore" min="0" inputmode="numeric" value={fieldValue("maxScore")} />
+          <label for="sort">Sort by</label>
+          <select id="sort" name="sort">
+            <option value="desc" selected={sortValue === "desc"}>Highest score first</option>
+            <option value="asc" selected={sortValue === "asc"}>Lowest score first</option>
+          </select>
         </div>
         <div class="filter-field">
           <label for="from">From (YYYY-MM-DD)</label>
@@ -119,7 +123,7 @@ const activeFilters = [
         <div class="filter-actions">
           <button class="button primary" type="submit">Search</button>
           <a class="button" href={todayHref}>Today</a>
-          {hasFilters && (
+          {hasAnyQueryParam && (
             <a class="button" href="/leaderboard/">
               Clear
             </a>
@@ -175,16 +179,19 @@ const activeFilters = [
             </thead>
             <tbody>
               {entries.map((entry, index) => (
-                <tr>
+                <tr class={entry.isMine ? "mine" : undefined}>
                   <td>{index + 1}</td>
-                  <td>{entry.displayName}</td>
+                  <td>
+                    {entry.displayName}
+                    {entry.isMine && <span class="you-badge">YOU</span>}
+                  </td>
                   <td>{entry.score}</td>
                   <td>{formatDuration(entry.survivalTimeMs)}</td>
                   <td>{formatFinishedAt(entry.finishedAt)}</td>
                   <td>
                     {entry.isMine && (
-                      <button type="button" class="button danger" data-action="remove-me">
-                        Remove
+                      <button type="button" class="button danger" data-action="delete-me">
+                        Delete my data
                       </button>
                     )}
                   </td>
@@ -197,13 +204,21 @@ const activeFilters = [
     </main>
     <script>
       const statusEl = document.getElementById("leaderboard-status")!;
-      const removeButton = document.querySelector<HTMLButtonElement>('[data-action="remove-me"]');
+      const deleteButton = document.querySelector<HTMLButtonElement>('[data-action="delete-me"]');
 
-      removeButton?.addEventListener("click", async () => {
-        if (!confirm("Remove your best score from the leaderboard?")) return;
+      deleteButton?.addEventListener("click", async () => {
+        // A native confirm() is a modal the browser itself renders — there's
+        // no custom dialog component in this app to use instead, and this is
+        // exactly the kind of irreversible action that calls for one.
+        const confirmed = confirm(
+          "Delete all your game data permanently?\n\n" +
+            "All of your scores and game history associated with this anonymous " +
+            "player will be permanently deleted. This action cannot be undone.",
+        );
+        if (!confirmed) return;
 
-        statusEl.textContent = "Removing…";
-        removeButton.disabled = true;
+        statusEl.textContent = "Deleting…";
+        deleteButton.disabled = true;
         try {
           // Astro's CSRF check only waives form-like content types for
           // same-origin requests without an Origin header; application/json
@@ -213,16 +228,16 @@ const activeFilters = [
             headers: { "content-type": "application/json" },
           });
           if (res.ok) {
-            statusEl.textContent = "Removed from the leaderboard.";
+            statusEl.textContent = "Your game data has been permanently deleted.";
             window.location.reload();
             return;
           }
           const data = await res.json().catch(() => ({}) as { reason?: string });
-          statusEl.textContent = `Couldn't remove your entry: ${data.reason ?? res.statusText}`;
+          statusEl.textContent = `Couldn't delete your data: ${data.reason ?? res.statusText}`;
         } catch {
-          statusEl.textContent = "Couldn't reach the server to remove your entry.";
+          statusEl.textContent = "Couldn't reach the server to delete your data.";
         } finally {
-          removeButton.disabled = false;
+          deleteButton.disabled = false;
         }
       });
     </script>
