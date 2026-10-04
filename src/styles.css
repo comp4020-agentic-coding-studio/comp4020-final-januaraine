@@ -304,3 +304,129 @@ tr.mine {
     flex-direction: column;
   }
 }
+
+/* --- leaderboard: mobile layout ---------------------------------------
+   Below 640px the filter row stacks full-width and the table becomes a
+   list of cards (same markup, `display` changed) — the overflow on small
+   screens came from six table columns, not from any one control, so a
+   table-to-card transform fixes the actual source rather than shrinking
+   text until it's unreadable. The underlying element is still a real
+   `<table>`, so a screen reader can still read it row by row even though
+   it's no longer laid out as one. */
+@media (max-width: 640px) {
+  .leaderboard-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .filter-field,
+  .filter-actions {
+    width: 100%;
+  }
+
+  .filter-field input,
+  .filter-field select {
+    width: 100%;
+    /* 16px+ keeps iOS Safari from zooming the page in on focus. */
+    font-size: 1rem;
+  }
+
+  .filter-actions {
+    flex-wrap: wrap;
+  }
+
+  .filter-actions .button {
+    flex: 1 1 auto;
+    min-width: 6rem;
+    padding: 0.75rem 1rem;
+    text-align: center;
+  }
+
+  table {
+    display: block;
+  }
+
+  thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  tbody {
+    display: block;
+  }
+
+  tbody tr {
+    display: block;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    padding: 0.9rem 1rem;
+    margin-bottom: 0.75rem;
+  }
+
+  tbody tr.mine {
+    border-color: var(--accent-dim);
+  }
+
+  tbody td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.3rem 0;
+    border-bottom: none;
+    font-size: 0.95rem;
+  }
+
+  tbody td[data-label]::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.7rem;
+  }
+
+  tbody td .cell-value {
+    text-align: right;
+  }
+
+  tbody td[data-label="Score"] .cell-value {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  tbody td.rank {
+    display: block;
+    font-weight: 700;
+    color: var(--accent);
+    font-size: 1rem;
+    padding: 0 0 0.5rem;
+    margin-bottom: 0.35rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  tbody td.rank::before {
+    content: "#";
+    opacity: 0.7;
+  }
+
+  tbody td.row-actions {
+    display: block;
+    padding-top: 0.6rem;
+  }
+
+  tbody td.row-actions:not(:has(button)) {
+    display: none;
+  }
+
+  tbody td.row-actions button {
+    width: 100%;
+    padding: 0.75rem 1rem;
+  }
+}

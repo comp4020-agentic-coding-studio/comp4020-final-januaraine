@@ -95,30 +95,12 @@ const activeFilters = [
           </select>
         </div>
         <div class="filter-field">
-          <label for="from">From (YYYY-MM-DD)</label>
-          <input
-            type="text"
-            id="from"
-            name="from"
-            placeholder="YYYY-MM-DD"
-            pattern="\d{4}-\d{2}-\d{2}"
-            title="YYYY-MM-DD"
-            maxlength="10"
-            value={fieldValue("from")}
-          />
+          <label for="from">From</label>
+          <input type="date" id="from" name="from" value={fieldValue("from")} />
         </div>
         <div class="filter-field">
-          <label for="to">To (YYYY-MM-DD)</label>
-          <input
-            type="text"
-            id="to"
-            name="to"
-            placeholder="YYYY-MM-DD"
-            pattern="\d{4}-\d{2}-\d{2}"
-            title="YYYY-MM-DD"
-            maxlength="10"
-            value={fieldValue("to")}
-          />
+          <label for="to">To</label>
+          <input type="date" id="to" name="to" value={fieldValue("to")} />
         </div>
         <div class="filter-actions">
           <button class="button primary" type="submit">Search</button>
@@ -180,15 +162,23 @@ const activeFilters = [
             <tbody>
               {entries.map((entry, index) => (
                 <tr class={entry.isMine ? "mine" : undefined}>
-                  <td>{index + 1}</td>
-                  <td>
-                    {entry.displayName}
-                    {entry.isMine && <span class="you-badge">YOU</span>}
+                  <td class="rank">{index + 1}</td>
+                  <td data-label="Player">
+                    <span class="cell-value">
+                      {entry.displayName}
+                      {entry.isMine && <span class="you-badge">YOU</span>}
+                    </span>
                   </td>
-                  <td>{entry.score}</td>
-                  <td>{formatDuration(entry.survivalTimeMs)}</td>
-                  <td>{formatFinishedAt(entry.finishedAt)}</td>
-                  <td>
+                  <td data-label="Score">
+                    <span class="cell-value">{entry.score}</span>
+                  </td>
+                  <td data-label="Survived">
+                    <span class="cell-value">{formatDuration(entry.survivalTimeMs)}</span>
+                  </td>
+                  <td data-label="Finished">
+                    <span class="cell-value">{formatFinishedAt(entry.finishedAt)}</span>
+                  </td>
+                  <td class="row-actions">
                     {entry.isMine && (
                       <button type="button" class="button danger" data-action="delete-me">
                         Delete my data
