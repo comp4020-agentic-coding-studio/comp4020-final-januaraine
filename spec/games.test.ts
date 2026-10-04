@@ -57,7 +57,13 @@ describe("submitting a game result", () => {
     expect(submitted.ok).toBe(true);
     expect(submitted.game.score).toBe(score);
 
-    const leaderboard = await fetch(new URL("/api/leaderboard", baseUrl));
+    // The leaderboard is now one row per distinct player, so a mid-range
+    // score isn't guaranteed a place in the unfiltered top 10 once enough
+    // other players have scored higher — look this player up by name
+    // instead of assuming their row survives into that window.
+    const leaderboard = await fetch(
+      new URL(`/api/leaderboard?player=${encodeURIComponent(submitted.game.displayName)}`, baseUrl),
+    );
     expect(leaderboard.status).toBe(200);
     const { entries } = await leaderboard.json();
     const mine = entries.find((entry: { gameId: number }) => entry.gameId === submitted.game.id);

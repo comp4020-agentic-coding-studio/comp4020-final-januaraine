@@ -1,0 +1,1 @@
+ALTER TABLE `players` ADD `hidden_from_leaderboard` integer DEFAULT false NOT NULL;

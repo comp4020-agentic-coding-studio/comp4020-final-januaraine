@@ -96,6 +96,21 @@ nav[aria-label="site"] a:focus-visible {
   background: #4dffa0;
 }
 
+.button.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.button.danger:hover,
+.button.danger:focus-visible {
+  background: rgba(255, 92, 92, 0.1);
+}
+
+.button.danger:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* --- play screen ---------------------------------------------------- */
 
 .arena-layout {
@@ -173,6 +188,60 @@ nav[aria-label="site"] a:focus-visible {
 }
 
 /* --- leaderboard ------------------------------------------------------ */
+
+.leaderboard-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+}
+
+.filter-field label {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.75rem;
+}
+
+.filter-field input {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  min-width: 0;
+}
+
+.filter-field input:focus-visible {
+  outline: 2px solid var(--accent-dim);
+  outline-offset: 1px;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.filters-note,
+.active-filters {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin: 0.25rem 0;
+}
+
+#leaderboard-status:not(:empty) {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
 
 table {
   border-collapse: collapse;

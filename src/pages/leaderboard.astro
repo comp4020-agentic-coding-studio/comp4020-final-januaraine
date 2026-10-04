@@ -1,11 +1,28 @@
 ---
-import { listLeaderboard } from "../lib/db";
+import { type LeaderboardEntry, listLeaderboard, parseLeaderboardQuery } from "../lib/db";
+import { getExistingPlayer } from "../lib/session";
 import "../styles.css";
 
 // Server-rendered from the database on every request — a refresh re-queries
 // rather than reading anything cached in the page or the browser, which is
-// what "survives a refresh" actually requires.
-const entries = listLeaderboard(10);
+// what "survives a refresh" actually requires. Search/filtering is just the
+// request's own query string, read and validated here with the same
+// parseLeaderboardQuery the JSON API uses, so a GET form submit is all the
+// client-side code search needs.
+const rawParams = Astro.url.searchParams;
+const parsed = parseLeaderboardQuery(rawParams);
+const currentPlayer = getExistingPlayer(Astro.cookies);
+
+const fieldValue = (name: string): string => rawParams.get(name) ?? "";
+const hasFilters = ["player", "minScore", "maxScore", "from", "to"].some((name) => fieldValue(name) !== "");
+
+let entries: LeaderboardEntry[] = [];
+let errors: string[] = [];
+if (parsed.ok) {
+  entries = listLeaderboard({ ...parsed.filters, limit: 10, currentPlayerId: currentPlayer?.id ?? null });
+} else {
+  errors = parsed.errors;
+}
 
 function formatDuration(ms: number): string {
   const totalSeconds = Math.round(ms / 1000);
@@ -13,6 +30,33 @@ function formatDuration(ms: number): string {
   const seconds = totalSeconds % 60;
   return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
+
+// Fixed English Y-M-D formatting, built by hand rather than
+// toLocaleString(), so "Finished" can't drift from the YYYY-MM-DD the date
+// filters use (toLocaleString("en-AU") reads DD/MM/YYYY, easy to misread
+// next to a YYYY-MM-DD filter). Doesn't change what instant is stored or
+// compared — only how it's displayed.
+function formatFinishedAt(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${date} ${time}`;
+}
+
+const today = new Date().toISOString().slice(0, 10);
+const todayParams = new URLSearchParams(rawParams);
+todayParams.set("from", today);
+todayParams.set("to", today);
+const todayHref = `/leaderboard/?${todayParams.toString()}`;
+
+const activeFilters = [
+  fieldValue("player") && `player contains "${fieldValue("player")}"`,
+  fieldValue("minScore") && `score ≥ ${fieldValue("minScore")}`,
+  fieldValue("maxScore") && `score ≤ ${fieldValue("maxScore")}`,
+  fieldValue("from") && `finished on/after ${fieldValue("from")}`,
+  fieldValue("to") && `finished on/before ${fieldValue("to")}`,
+].filter((part): part is string => Boolean(part));
 ---
 
 <!doctype html>
@@ -31,11 +75,92 @@ function formatDuration(ms: number): string {
     </nav>
     <main>
       <h1>Leaderboard</h1>
-      <p>Top {entries.length > 0 ? entries.length : "0"} runs, highest score first.</p>
+      <p>Top {entries.length > 0 ? entries.length : "0"} players, ranked by personal best score.</p>
+
+      <form method="get" class="leaderboard-filters" aria-label="Search leaderboard">
+        <div class="filter-field">
+          <label for="player">Player</label>
+          <input type="search" id="player" name="player" placeholder="e.g. 5D2C" value={fieldValue("player")} />
+        </div>
+        <div class="filter-field">
+          <label for="minScore">Min score</label>
+          <input type="number" id="minScore" name="minScore" min="0" inputmode="numeric" value={fieldValue("minScore")} />
+        </div>
+        <div class="filter-field">
+          <label for="maxScore">Max score</label>
+          <input type="number" id="maxScore" name="maxScore" min="0" inputmode="numeric" value={fieldValue("maxScore")} />
+        </div>
+        <div class="filter-field">
+          <label for="from">From (YYYY-MM-DD)</label>
+          <input
+            type="text"
+            id="from"
+            name="from"
+            placeholder="YYYY-MM-DD"
+            pattern="\d{4}-\d{2}-\d{2}"
+            title="YYYY-MM-DD"
+            maxlength="10"
+            value={fieldValue("from")}
+          />
+        </div>
+        <div class="filter-field">
+          <label for="to">To (YYYY-MM-DD)</label>
+          <input
+            type="text"
+            id="to"
+            name="to"
+            placeholder="YYYY-MM-DD"
+            pattern="\d{4}-\d{2}-\d{2}"
+            title="YYYY-MM-DD"
+            maxlength="10"
+            value={fieldValue("to")}
+          />
+        </div>
+        <div class="filter-actions">
+          <button class="button primary" type="submit">Search</button>
+          <a class="button" href={todayHref}>Today</a>
+          {hasFilters && (
+            <a class="button" href="/leaderboard/">
+              Clear
+            </a>
+          )}
+        </div>
+      </form>
+      <p class="filters-note">Dates use YYYY-MM-DD (UTC). Player search matches part of a name.</p>
+      {activeFilters.length > 0 && errors.length === 0 && (
+        <p class="active-filters">Filtering by: {activeFilters.join(", ")}.</p>
+      )}
+
       {
-        entries.length === 0 ? (
-          <p class="panel">No games finished yet — <a href="/play/">play one</a>.</p>
-        ) : (
+        errors.length > 0 && (
+          <div class="panel" role="alert">
+            <p>That search couldn't be run:</p>
+            <ul>
+              {errors.map((message) => (
+                <li>{message}</li>
+              ))}
+            </ul>
+          </div>
+        )
+      }
+
+      <p id="leaderboard-status" role="status"></p>
+
+      {
+        errors.length === 0 && entries.length === 0 && hasFilters && (
+          <p class="panel">No players match your search.</p>
+        )
+      }
+      {
+        errors.length === 0 && entries.length === 0 && !hasFilters && (
+          <p class="panel">
+            No games finished yet — <a href="/play/">play one</a>.
+          </p>
+        )
+      }
+
+      {
+        errors.length === 0 && entries.length > 0 && (
           <table>
             <caption class="sr-only">Snake Arena leaderboard</caption>
             <thead>
@@ -45,6 +170,7 @@ function formatDuration(ms: number): string {
                 <th scope="col">Score</th>
                 <th scope="col">Survived</th>
                 <th scope="col">Finished</th>
+                <th scope="col">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -54,7 +180,14 @@ function formatDuration(ms: number): string {
                   <td>{entry.displayName}</td>
                   <td>{entry.score}</td>
                   <td>{formatDuration(entry.survivalTimeMs)}</td>
-                  <td>{new Date(entry.finishedAt).toLocaleString("en-AU")}</td>
+                  <td>{formatFinishedAt(entry.finishedAt)}</td>
+                  <td>
+                    {entry.isMine && (
+                      <button type="button" class="button danger" data-action="remove-me">
+                        Remove
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -62,5 +195,36 @@ function formatDuration(ms: number): string {
         )
       }
     </main>
+    <script>
+      const statusEl = document.getElementById("leaderboard-status")!;
+      const removeButton = document.querySelector<HTMLButtonElement>('[data-action="remove-me"]');
+
+      removeButton?.addEventListener("click", async () => {
+        if (!confirm("Remove your best score from the leaderboard?")) return;
+
+        statusEl.textContent = "Removing…";
+        removeButton.disabled = true;
+        try {
+          // Astro's CSRF check only waives form-like content types for
+          // same-origin requests without an Origin header; application/json
+          // is what marks this as a script-driven call, not a <form> post.
+          const res = await fetch("/api/leaderboard/me", {
+            method: "DELETE",
+            headers: { "content-type": "application/json" },
+          });
+          if (res.ok) {
+            statusEl.textContent = "Removed from the leaderboard.";
+            window.location.reload();
+            return;
+          }
+          const data = await res.json().catch(() => ({}) as { reason?: string });
+          statusEl.textContent = `Couldn't remove your entry: ${data.reason ?? res.statusText}`;
+        } catch {
+          statusEl.textContent = "Couldn't reach the server to remove your entry.";
+        } finally {
+          removeButton.disabled = false;
+        }
+      });
+    </script>
   </body>
 </html>

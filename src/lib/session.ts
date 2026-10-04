@@ -40,3 +40,13 @@ export function getOrCreatePlayer(cookies: AstroCookies): Player {
   });
   return player;
 }
+
+// Read-only counterpart to getOrCreatePlayer: looks up the caller's identity
+// from the same cookie, but never mints one. For routes where "who is
+// viewing" only matters if they've already played — e.g. the leaderboard —
+// so a pure spectator doesn't get a players row just for looking.
+export function getExistingPlayer(cookies: AstroCookies): Player | null {
+  const token = cookies.get(SESSION_COOKIE)?.value;
+  if (!token) return null;
+  return findPlayerByToken(token);
+}
