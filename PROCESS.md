@@ -22,7 +22,7 @@ I built Snake Arena, a browser-based multiplayer Snake game designed around a si
 
 4. **the citation**:
 
-   [COMMIT_OR_COMMIT_RANGE](GITHUB_COMMIT_OR_COMPARE_URL)
+   [5dcd4af...12e6e18](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/compare/5dcd4af...12e6e18)
 
 
 ### Moment 2: Treating anonymous identity and data deletion as separate engineering problems
@@ -43,4 +43,4 @@ I built Snake Arena, a browser-based multiplayer Snake game designed around a si
 
 4. **the citation**:
 
-   [COMMIT_OR_COMMIT_RANGE](GITHUB_COMMIT_OR_COMPARE_URL)
+   [4590428...fe11139](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/compare/4590428...fe11139)
