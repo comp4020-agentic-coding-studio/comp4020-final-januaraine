@@ -1,0 +1,9 @@
+# Crit 8
+
+**What was the breakthrough that moved the work forward?**
+
+The breakthrough was realising that the project should be designed around a small number of strong system boundaries rather than around individual features. Building a complete gameplay loop first gave me a stable foundation, while making the server authoritative for shared state separated game rules from client rendering and input. The leaderboard work reinforced the same idea: the correct result should be produced by the backend data model rather than fixed afterwards in the UI. This changed the project from "a Snake game with some extra features" into a small full-stack system where identity, state, persistence, and real-time interaction have clear responsibilities.
+
+**What did this work change about who I want to be as a software developer?**
+
+This work made me more interested in being a software developer who can reason about the whole system rather than only implementing individual features. I found that the difficult parts were often not the visible UI features, but decisions about state ownership, data lifecycle, authorization, persistence, and how different parts of the system interact. It also made me more comfortable starting with a small working system and evolving it through deliberate engineering decisions instead of trying to build everything at once. Going forward, I want to become a developer who can turn an idea into a reliable product, understand the trade-offs behind the architecture, and use AI coding tools as part of that engineering process rather than relying on them to make the decisions for me.
