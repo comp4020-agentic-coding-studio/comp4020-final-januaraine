@@ -121,8 +121,16 @@ with no leaderboard row created. `pnpm check` (typecheck, unit, and the full
 spec suite including the new arena tests) passes against the built app on a
 scratch database, run twice to rule out flakiness.
 
-One real gap: this sandboxed development environment has no browser
+Two real gaps in local verification, both pre-existing limits of this
+sandboxed environment rather than anything new this week: it has no browser
 installed, so the actual canvas/`EventSource` browser code couldn't be
-visually verified here — only its server-side contract. The deployed app
-was checked afterward with two genuinely separate browser sessions; see the
-final report for what that check actually showed.
+visually checked here, only its server-side contract over raw HTTP/SSE; and
+its container runtime can't do a rootless Docker build (no `subuid`/
+`subgid` mapping for this account — confirmed again this session), so the
+exact image CI builds and Fly deploys wasn't built locally either. What was
+verified instead, both times, is the thing the image actually runs:
+`pnpm build` then `node ./dist/server/entry.mjs` serving every route,
+including the new arena ones, correctly. CI building and running the real
+Dockerfile, and the live deployed app checked with two genuinely separate
+browser sessions, are what closes both gaps; see the final report for what
+those actually showed.
