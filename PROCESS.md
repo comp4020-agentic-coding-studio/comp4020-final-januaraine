@@ -1,46 +1,128 @@
-## What I built
+# Process overview
 
-I built Snake Arena, a browser-based multiplayer Snake game designed around a simple idea: turn the familiar single-player Snake game into a small shared competitive space. Players can play anonymously, control their snake in real time, compete for food and score, and have their best result recorded on a persistent leaderboard. The project focuses on making real-time interaction, persistence, and player identity part of the core experience rather than adding them as secondary features. The application is deployed as a full-stack web application, with the server responsible for authoritative game state and the database responsible for persistent game results.
+How this got from the brief to the app in the repo, told across the two
+milestones it's actually been built in.
 
-## The moments that mattered
+## C8 — the single-player core (previous session)
 
-### Moment 1: Building the game as a vertical slice before adding multiplayer
+Built in one agent-directed session: a detailed brief (scope, acceptance
+criteria, and the C9/C10 architecture constraints that scope had to survive),
+then inspect → plan → implement → verify, one architectural layer per commit:
+[`30720db`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/commit/30720db)
+(stack scaffolding and Fly deploy config),
+[`5dcd4af`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/commit/5dcd4af)
+(the framework-independent game core and its unit tests),
+[`cca89a0`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/commit/cca89a0)
+(backend: schema, persistence, session identity, API routes),
+[`1038c2c`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/commit/1038c2c)
+(frontend: input, rendering, loop, pages), and
+[`12e6e18`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/commit/12e6e18)
+(the integration spec).
 
-1. **what happened**:
+Two decisions from that session mattered enough to still shape C9 directly:
 
-   The first important decision was to build a complete playable version of Snake before implementing multiplayer. The initial goal was deliberately small: a player should be able to enter the game, control the snake, eat food, grow, accumulate score, collide, and finish a run. This gave the project a complete gameplay loop before introducing WebSockets and multi-user synchronization.
+**A framework-independent game core.** The instruction that shaped every
+other C8 choice was that C9 would add a server-side authoritative loop and
+realtime networking on top, without a rewrite. `src/game/` ended up as pure
+functions over a `GameState` value — `movement.ts`, `collision.ts`,
+`food.ts`, `rules.ts`, `state.ts` — none of them touching the DOM, Astro, or
+the database, with even food placement taking an injected `RandomSource`
+instead of calling `Math.random()` directly. That paid off directly this
+session: C9's `src/game/arena.ts` reuses `hitsWall`/`hitsSelf`/
+`nextHeadPosition`/`isValidDirectionChange`/`randomEmptyCell` unchanged
+rather than re-deriving any of them.
 
-2. **what you did instead of the obvious thing**:
+**Server-side result validation without server-side replay.** C8 ran the
+game client-side, so it couldn't replay a match to check a submitted score —
+but `tick()` awards at most one food per call, so `score / POINTS_PER_FOOD`
+can never legitimately exceed the reported `ticks`; `src/game/validate.ts`
+checks exactly that bound. That file's own comment already anticipated this
+week: once a server runs `tick()`-equivalent logic itself, the score it
+persists is simply the one it computed, and the bound becomes a sanity
+assertion rather than the whole defense — which is exactly how
+`src/lib/arena-server.ts` uses it now.
 
-   Instead of starting with the multiplayer infrastructure immediately, I separated the core game rules from the networking and UI layers. I treated the single-player game as the foundation and designed the game state so that it could later be controlled by a server-authoritative multiplayer loop.
+## C9 — real-time multiplayer (this session)
 
-   This meant that movement, collision detection, food generation, growth, scoring, and game-over conditions were treated as game rules rather than UI behaviour.
+### What I inspected before changing anything
 
-3. **how you knew it was right**:
+README.md's C8 "what good means" section, the whole of `src/game/`,
+`src/frontend/`, `src/lib/`, `src/pages/api/`, the Drizzle schema and
+migrations, the anonymous session-cookie identity mechanism, `spec/*`,
+`astro.config.ts`/the `@astrojs/node` adapter's actual source (to find out
+whether it exposes a raw HTTP server for a WebSocket upgrade — it doesn't, in
+`mode: "standalone"`, without ejecting it), `Dockerfile`/`fly.toml`/
+`.github/workflows/checks.yml`, and the git history. There was no realtime
+channel, no multi-snake state, and no server-side game loop anywhere in the
+repo — C8 was exactly what its own README said it was.
 
-   The vertical slice gave me a working and testable game before the complexity of real-time synchronization was introduced. It also reduced the risk of debugging gameplay bugs and WebSocket bugs simultaneously. Once the core loop was reliable, multiplayer could be treated as a synchronization problem rather than a complete rewrite of the game.
+### Transport: Server-Sent Events, not WebSockets
 
-4. **the citation**:
+The brief leaves the transport to "mostly settled by your stack," and this
+stack settles it toward SSE: the Astro node adapter's standalone mode owns
+its own `http.Server` internally and doesn't expose it for a raw WebSocket
+`upgrade` without ejecting the adapter (a custom entry script, a Dockerfile
+`CMD` change, separate dev-mode wiring). A plain streaming `Response` needs
+none of that and behaves identically under `astro dev` and the built
+server. A live Fly.io community report from this year of WebSocket-upgrade
+requests failing with edge-level 403s for reasons unrelated to the
+application was the deciding factor against the alternative on a
+course deadline — not a benchmark, a risk assessment, made explicit here
+rather than silently assumed.
 
-   [5dcd4af...12e6e18](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/compare/5dcd4af...12e6e18)
+### The shared arena
 
+One continuous arena, not rooms or matches — the full reasoning, alternatives
+considered, and trade-offs are in
+[`docs/decisions/ADR-001-realtime-multiplayer.md`](docs/decisions/ADR-001-realtime-multiplayer.md).
+In short: a shared arena is the most direct reading of this README's own
+"Social" and "Reliable" definitions of good, and a room/match lifecycle would
+add exactly the kind of state (ready flags, a start condition, a winner,
+a reset) the brief says not to build unless the architecture requires it —
+it doesn't, for a one-process, `--ha=false` deploy.
 
-### Moment 2: Treating anonymous identity and data deletion as separate engineering problems
+### What actually got built
 
-1. **what happened**:
+- `src/game/arena.ts` + `arena.test.ts`
+  ([`8accb31`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/commit/8accb31)):
+  pure multiplayer rules — join/leave, per-player direction queuing, one
+  `tickArena()` step resolving wall/self/snake-vs-snake collisions (including
+  mutual head-to-head) against one consistent pre-move snapshot, shared food.
+- `src/lib/arena-server.ts` + the `/api/arena/*` routes
+  ([`ec1d18f`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/commit/ec1d18f)):
+  the one in-memory arena (one Fly machine, one process — no pub/sub to
+  build), a tick interval that only runs while someone's connected (so
+  `fly.toml`'s `auto_stop_machines` still works), and eliminated runs
+  persisted through the *existing* `recordGameResult` path, server-computed
+  instead of client-submitted. The wire format never sends a raw player id —
+  each connection's frame carries `isMine`, computed server-side from the
+  session cookie, the same pattern the leaderboard's `isMine` already uses.
+- `/arena/` + `src/frontend/arena-client.ts`/`arena-render.ts`
+  ([`c3db583`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/commit/c3db583)):
+  a new page and new render/client modules, not a change to `/play/`'s —
+  single-player is untouched.
+- `spec/arena.test.ts`
+  ([`6fbac48`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/commit/6fbac48)):
+  the same claims proven over real HTTP/SSE against the built app, including
+  a measured "well under a second" propagation assertion, not just an
+  unverified target.
 
-   While implementing the ability for a player to remove their leaderboard record, I realised that an anonymous player ID does not represent a real-world person or a physical computer. It represents an anonymous browser/session identity. Therefore, "delete my record" needed to be defined more precisely.
+### Verification
 
-2. **what you did instead of the obvious thing**:
+Before writing the automated spec tests, I drove the backend by hand: two
+independent session cookies (not two tabs of one session) against a local
+dev server, over raw HTTP/SSE via `curl`. Both players appeared to each
+other from the very first frame with distinct identities; a direction
+change POSTed by one showed up in the other's own stream on the next tick
+(~120ms); an unsteered snake's wall collision removed it from both views at
+once and produced a leaderboard row; a disconnect that reconnected inside
+the grace window resumed the same snake, while one that didn't was removed
+with no leaderboard row created. `pnpm check` (typecheck, unit, and the full
+spec suite including the new arena tests) passes against the built app on a
+scratch database, run twice to rule out flakiness.
 
-   Instead of implementing a simple "hide from leaderboard" flag, I chose permanent deletion of all persistent game data associated with the current anonymous player identity. The server determines the current player from the existing session identity rather than trusting a player ID supplied by the client.
-
-   Because the operation is irreversible, the UI also requires explicit confirmation before deletion. After deletion, the anonymous identity is invalidated so that the deleted data cannot accidentally become associated with the same identity again.
-
-3. **how you knew it was right**:
-
-   This approach makes the meaning of the feature explicit: the player is controlling the data associated with their current anonymous identity, rather than claiming to prove the identity of a real-world person. Server-side authorization also prevents a client from changing an ID in a request and deleting another player's data.
-
-4. **the citation**:
-
-   [4590428...fe11139](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/compare/4590428...fe11139)
+One real gap: this sandboxed development environment has no browser
+installed, so the actual canvas/`EventSource` browser code couldn't be
+visually verified here — only its server-side contract. The deployed app
+was checked afterward with two genuinely separate browser sessions; see the
+final report for what that check actually showed.
