@@ -1,0 +1,131 @@
+---
+import { getOrCreatePlayer } from "../lib/session";
+import "../styles.css";
+
+// Same server-side identity mint as /play/ — opening this page doesn't
+// itself join the arena (that happens when the script below opens the SSE
+// stream), but the cookie/player row has to exist first either way.
+const player = getOrCreatePlayer(Astro.cookies);
+---
+
+<!doctype html>
+<html lang="en-AU">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Arena — Snake Arena</title>
+  </head>
+  <body>
+    <nav aria-label="site">
+      <a href="/">Snake Arena</a>
+      <a href="/play/">Play</a>
+      <a href="/arena/">Arena</a>
+      <a href="/leaderboard/">Leaderboard</a>
+      <a href="/readme/">About</a>
+    </nav>
+    <main>
+      <div class="arena-layout">
+        <div class="arena-board">
+          <canvas id="board" width="480" height="480" aria-label="Snake Arena shared multiplayer board"></canvas>
+        </div>
+        <div class="hud">
+          <div class="hud-row">
+            <span>Player</span>
+            <strong id="player-name">{player.displayName}</strong>
+          </div>
+          <div class="hud-row">
+            <span>Score</span>
+            <strong id="score">0</strong>
+          </div>
+          <p id="status-banner" data-status="connecting">Connecting…</p>
+          <div class="controls-legend">
+            <p>
+              Move: <kbd>&uarr;</kbd> <kbd>&darr;</kbd> <kbd>&larr;</kbd> <kbd>&rarr;</kbd> or
+              <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>
+            </p>
+            <p>
+              A shared board — everyone here sees the same arena. Eat the amber dot to grow and score. Don't hit a
+              wall, your own tail, or run head-on into another snake.
+            </p>
+          </div>
+          <div id="eliminated-panel" class="panel" hidden>
+            <h2>Eliminated</h2>
+            <p>Final score: <strong id="final-score">0</strong></p>
+            <p>That run is already on the <a href="/leaderboard/">leaderboard</a>.</p>
+            <button id="respawn-button" class="button primary" type="button">Respawn</button>
+          </div>
+          <div class="panel players-panel">
+            <h2>Players</h2>
+            <ul id="players-list"></ul>
+          </div>
+        </div>
+      </div>
+    </main>
+    <script>
+      import { createArenaClient, respawn } from "../frontend/arena-client";
+      import { colorFor } from "../frontend/arena-render";
+      import { GRID_SIZE } from "../game/config";
+      import type { SerializedArena } from "../game/arena";
+
+      const canvas = document.getElementById("board") as HTMLCanvasElement;
+      const scoreEl = document.getElementById("score")!;
+      const statusEl = document.getElementById("status-banner")!;
+      const eliminatedPanel = document.getElementById("eliminated-panel")!;
+      const finalScoreEl = document.getElementById("final-score")!;
+      const respawnButton = document.getElementById("respawn-button") as HTMLButtonElement;
+      const playersList = document.getElementById("players-list")!;
+
+      function renderPlayersList(state: SerializedArena): void {
+        playersList.replaceChildren(
+          ...state.snakes
+            .slice()
+            .sort((a, b) => b.score - a.score)
+            .map((snake, index) => {
+              const li = document.createElement("li");
+              const swatch = document.createElement("span");
+              swatch.className = "swatch";
+              const [color] = snake.isMine ? (["#39ff8f"] as const) : colorFor(index);
+              swatch.style.background = color;
+              const label = document.createElement("span");
+              label.textContent = `${snake.displayName}${snake.isMine ? " (you)" : ""}`;
+              const score = document.createElement("strong");
+              score.textContent = String(snake.score);
+              li.append(swatch, label, score);
+              return li;
+            }),
+        );
+      }
+
+      function onState(state: SerializedArena): void {
+        statusEl.textContent = "Playing";
+        statusEl.dataset.status = "playing";
+        const mine = state.snakes.find((s) => s.isMine);
+        scoreEl.textContent = String(mine?.score ?? 0);
+        renderPlayersList(state);
+      }
+
+      function onEliminated(finalScore: number): void {
+        finalScoreEl.textContent = String(finalScore);
+        statusEl.textContent = "Eliminated";
+        statusEl.dataset.status = "eliminated";
+        eliminatedPanel.hidden = false;
+      }
+
+      const client = createArenaClient({
+        canvas,
+        cellPx: canvas.width / GRID_SIZE,
+        onState,
+        onEliminated,
+      });
+
+      respawnButton.addEventListener("click", async () => {
+        respawnButton.disabled = true;
+        eliminatedPanel.hidden = true;
+        await respawn();
+        respawnButton.disabled = false;
+      });
+
+      window.addEventListener("beforeunload", () => client.stop());
+    </script>
+  </body>
+</html>
