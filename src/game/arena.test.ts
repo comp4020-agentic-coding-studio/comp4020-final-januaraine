@@ -216,13 +216,27 @@ describe("tickArena", () => {
 });
 
 describe("serializeArena", () => {
-  it("turns the snakes record into an array alongside food and gridSize", () => {
+  it("turns the snakes record into an array alongside food and gridSize, with no raw playerId", () => {
+    let state = createArena(10, fixedRandom);
+    state = joinArena(state, 1, "Player One", fixedRandom);
+    state = joinArena(state, 2, "Player Two", fixedRandom);
+
+    const wire = serializeArena(state, 2);
+    expect(wire.gridSize).toBe(10);
+    expect(wire.food).toEqual(state.food);
+    expect(wire.snakes).toHaveLength(2);
+    expect(wire.snakes.every((s) => !("playerId" in s))).toBe(true);
+
+    const mine = wire.snakes.find((s) => s.isMine);
+    expect(mine?.displayName).toBe("Player Two");
+    expect(wire.snakes.filter((s) => s.isMine)).toHaveLength(1);
+  });
+
+  it("marks nobody as mine when no viewer is given", () => {
     let state = createArena(10, fixedRandom);
     state = joinArena(state, 1, "Player One", fixedRandom);
 
     const wire = serializeArena(state);
-    expect(wire.gridSize).toBe(10);
-    expect(wire.food).toEqual(state.food);
-    expect(wire.snakes).toEqual([state.snakes[1]]);
+    expect(wire.snakes.every((s) => !s.isMine)).toBe(true);
   });
 });

@@ -5,6 +5,16 @@
 
 export type Direction = "up" | "down" | "left" | "right";
 
+export const DIRECTIONS: readonly Direction[] = ["up", "down", "left", "right"];
+
+// Shared by the arena's input validation (client → server) and its own
+// internal guard — never trust a direction string without checking it's
+// actually one of these four, since it can come straight from a request
+// body.
+export function isDirection(value: unknown): value is Direction {
+  return typeof value === "string" && (DIRECTIONS as readonly string[]).includes(value);
+}
+
 export interface Point {
   readonly x: number;
   readonly y: number;

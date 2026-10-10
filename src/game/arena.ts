@@ -40,10 +40,21 @@ export interface ArenaTickResult {
   readonly eliminated: readonly EliminatedPlayer[];
 }
 
+// The wire shape clients actually receive: no raw playerId, the same
+// "isMine, computed server-side from the session" pattern
+// lib/db.ts's LeaderboardEntry already uses, rather than ever handing a
+// client an internal database id to compare against.
+export interface SerializedArenaSnake {
+  readonly displayName: string;
+  readonly segments: readonly Point[];
+  readonly score: number;
+  readonly isMine: boolean;
+}
+
 export interface SerializedArena {
   readonly gridSize: number;
   readonly food: Point;
-  readonly snakes: readonly ArenaSnake[];
+  readonly snakes: readonly SerializedArenaSnake[];
 }
 
 function allSegments(state: ArenaState): Point[] {
@@ -191,6 +202,15 @@ export function tickArena(state: ArenaState, random: RandomSource = Math.random)
   return { state: { snakes, food: newFood, gridSize: state.gridSize }, eliminated };
 }
 
-export function serializeArena(state: ArenaState): SerializedArena {
-  return { gridSize: state.gridSize, food: state.food, snakes: Object.values(state.snakes) };
+export function serializeArena(state: ArenaState, viewerPlayerId?: number): SerializedArena {
+  return {
+    gridSize: state.gridSize,
+    food: state.food,
+    snakes: Object.values(state.snakes).map((snake) => ({
+      displayName: snake.displayName,
+      segments: snake.segments,
+      score: snake.score,
+      isMine: snake.playerId === viewerPlayerId,
+    })),
+  };
 }
