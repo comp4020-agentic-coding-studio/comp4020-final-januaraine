@@ -35,7 +35,12 @@ jobs:
         # volume; the spec runs against it
         run: |
           docker build -t app .
-          docker run -d --init --name app -p 8080:8080 -e PORT=8080 --tmpfs /data app
+          # ARENA_DISCONNECT_GRACE_MS is shortened only for this test run —
+          # production keeps fly.toml's unset default (arena-server.ts's own
+          # 5s), chosen to outlast EventSource's own ~3s auto-reconnect
+          # delay. The spec's disconnect/reconnect tests need the window
+          # short enough to run in seconds, not minutes.
+          docker run -d --init --name app -p 8080:8080 -e PORT=8080 -e ARENA_DISCONNECT_GRACE_MS=400 --tmpfs /data app
       - name: Run the spec
         run: pnpm check
         env:
