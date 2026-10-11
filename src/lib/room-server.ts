@@ -21,7 +21,7 @@ import { validateGameResult } from "../game/validate";
 import { createRoom, deleteRoom, recordGameResult } from "./db";
 
 // Overridable so spec/rooms.test.ts doesn't have to wait out a real-world
-// grace window to prove the disconnect/creator-departure rules.
+// grace window to prove the disconnect and room-closure rules.
 const DISCONNECT_GRACE_MS = Number(process.env.ARENA_DISCONNECT_GRACE_MS) || 5000;
 
 export const MAX_PLAYERS = 5;
@@ -180,10 +180,15 @@ export function createRoomAndJoinCreator(input: {
 
 // A player can only ever be a member of one room at a time (see
 // ADR-002) — joining a new room (or creating one) first tears down any
-// existing membership elsewhere, exactly like an explicit "Leave Room".
+// existing membership elsewhere, exactly like an explicit departure.
 // `exceptRoomId` excludes the room being joined itself: a same-room role
-// switch must never go through leaveRoom's creator-closes-the-room rule,
-// since the creator switching their own role isn't "the creator leaving".
+// switch (handled below by mutating `existing.role` in place, never by
+// removing and re-adding the member) must never go through leaveRoom —
+// routing it through there would lose connection/reconnect state for no
+// reason. Whether that role switch itself should close the room (its last
+// Player switching to Viewer) is decided separately, by
+// closeRoomIfNoPlayersLeft (see ADR-004) — correctly, not as an accident of
+// which function happened to run.
 function leaveOtherRooms(playerId: number, exceptRoomId?: number): void {
   for (const runtime of rooms.values()) {
     if (runtime.id === exceptRoomId) continue;
@@ -230,9 +235,20 @@ export function joinRoom(
   }
   runtime.arena = role === "player" ? joinArena(runtime.arena, playerId, displayName) : leaveArena(runtime.arena, playerId);
 
+  // A role switch (unlike a brand-new join) can be the one that drops the
+  // room to zero Players — e.g. its last Player switching to Viewer here
+  // instead of through becomeViewer below. See ADR-004: closing applies to
+  // every path that can change who's a Player, not just departure.
+  if (role === "viewer") closeRoomIfNoPlayersLeft(runtime);
+
   return { ok: true };
 }
 
+// The room page hides its role-toggle button entirely for a locked room
+// (every member, creator included — see room/[id].astro), but that's a UI
+// convenience, not the actual guarantee: this `locked && !isCreator` check
+// is what a non-creator calling this endpoint directly still runs into, the
+// same rule joinRoom enforces for a brand-new join.
 export const becomePlayer = (roomId: number, playerId: number, displayName: string): JoinResult => {
   const runtime = rooms.get(roomId);
   if (!runtime) return { ok: false, reason: "room not found" };
@@ -249,6 +265,11 @@ export const becomePlayer = (roomId: number, playerId: number, displayName: stri
   return { ok: true };
 };
 
+// If this is the room's last Player stepping down, the authoritative
+// membership is updated first (the line above) and only then does
+// closeRoomIfNoPlayersLeft run — so a room that closes here notifies every
+// remaining Viewer's connection, this caller's own included, exactly as
+// ADR-004 requires ("including the user who just became a Viewer").
 export function becomeViewer(roomId: number, playerId: number): JoinResult {
   const runtime = rooms.get(roomId);
   if (!runtime) return { ok: false, reason: "room not found" };
@@ -258,23 +279,25 @@ export function becomeViewer(roomId: number, playerId: number): JoinResult {
 
   member.role = "viewer";
   runtime.arena = leaveArena(runtime.arena, playerId);
+  closeRoomIfNoPlayersLeft(runtime);
   return { ok: true };
 }
 
-// Explicit "Leave Room" — immediate, no grace window (that's only for an
-// unplanned disconnect). If the departing member is the room's creator,
-// the whole room closes (see ADR-002's lifecycle policy): every other
-// member's connection is told so (a distinct SSE event, not just a dropped
-// stream) and then closed from the server side.
+// Intentional departure — immediate, no grace window (that's only for an
+// unplanned disconnect, see unregisterRoomConnection). Removes exactly this
+// member, regardless of whether they created the room: room lifetime is
+// Player-count-based, not creator-based and not member-count-based (see
+// docs/decisions/ADR-004-room-closes-when-the-last-player-leaves.md, which
+// supersedes ADR-003's "any member keeps it alive" clause) — the creator
+// only ever matters for the separate, independent question of who a locked
+// room still lets become a Player (ADR-002). Safe to call twice for the
+// same member (the `!has` guard below) and safe to call on a room that has
+// already closed (the `!runtime` guard) — both idempotency properties the
+// navigation-release paths in room/[id].astro rely on.
 export function leaveRoom(roomId: number, playerId: number): void {
   const runtime = rooms.get(roomId);
   if (!runtime) return;
   if (!runtime.members.has(playerId)) return;
-
-  if (playerId === runtime.creatorPlayerId) {
-    closeRoom(roomId, "creator left");
-    return;
-  }
 
   runtime.members.delete(playerId);
   runtime.arena = leaveArena(runtime.arena, playerId);
@@ -283,8 +306,37 @@ export function leaveRoom(roomId: number, playerId: number): void {
     clearTimeout(timer);
     runtime.disconnectTimers.delete(playerId);
   }
+
+  if (closeRoomIfNoPlayersLeft(runtime)) return;
   broadcastRoom(runtime);
   stopTickLoopIfIdle(runtime);
+}
+
+// The one place "is this room still worth keeping open" is decided: never by
+// who just left or how many members remain, only by whether any Player is
+// left (ADR-004). A room can close with Viewers still present — when it
+// does, they're exactly the audience `closeRoom`'s broadcast below needs to
+// reach, which is why this always runs before a caller's own
+// broadcast/stop-the-tick-loop housekeeping, not after. Returns true if it
+// closed the room, so that caller can skip its own housekeeping on a now-
+// deleted runtime instead.
+//
+// Closing is synchronous and holds no intermediate state: there is no
+// window where a room is "closing but not yet closed" for a concurrent
+// request to observe — by the time any other handler's turn on the event
+// loop runs, `rooms.get(roomId)` is either still the live runtime (a Player
+// remains) or already gone entirely (`closeRoom` below has already run).
+// That's what makes "don't let a Viewer become a Player in a closing room"
+// a free property of every join path's existing `!runtime` check, not
+// something that needs its own flag.
+function closeRoomIfNoPlayersLeft(runtime: RoomRuntime): boolean {
+  if (playerCount(runtime) > 0) return false;
+  const reason =
+    runtime.members.size > 0
+      ? "The last Player has left. This room is closing."
+      : "This room is empty and has closed.";
+  closeRoom(runtime.id, reason);
+  return true;
 }
 
 function closeRoom(roomId: number, reason: string): void {
@@ -419,10 +471,17 @@ export function registerRoomConnection(
 }
 
 // Disconnect grace applies to every member, not just Players — a Viewer's
-// tab closing shouldn't instantly disappear them from the member list either
-// (a network blip looks the same from the server's side regardless of
-// role). Only a Player disconnecting can ever cost them their snake; only
-// the *creator* disconnecting can ever cost the room its existence.
+// tab closing shouldn't instantly disappear them from the member list
+// either (a network blip looks the same from the server's side regardless
+// of role). This is the *temporary disconnection* path: no accompanying
+// departure signal arrived (contrast leaveRoom, which is *intentional
+// departure* — see room/[id].astro and ADR-003), so the member only
+// actually leaves once this grace window elapses with no reconnect. A
+// Player disconnecting can cost them their snake; a Player's grace expiring
+// can also cost the room its existence, if they were its last Player (see
+// ADR-004) — never because of who they were, and never merely because they
+// were the last *member*, since Viewers who stay connected throughout don't
+// keep a Player-less room alive.
 export function unregisterRoomConnection(connectionId: number): void {
   for (const runtime of rooms.values()) {
     const connection = runtime.connections.get(connectionId);
@@ -436,12 +495,9 @@ export function unregisterRoomConnection(connectionId: number): void {
     if (!stillConnected && !runtime.disconnectTimers.has(connection.playerId)) {
       const timer = setTimeout(() => {
         runtime.disconnectTimers.delete(connection.playerId);
-        if (connection.playerId === runtime.creatorPlayerId) {
-          closeRoom(runtime.id, "creator disconnected");
-          return;
-        }
         runtime.members.delete(connection.playerId);
         runtime.arena = leaveArena(runtime.arena, connection.playerId);
+        if (closeRoomIfNoPlayersLeft(runtime)) return;
         broadcastRoom(runtime);
         stopTickLoopIfIdle(runtime);
       }, DISCONNECT_GRACE_MS);

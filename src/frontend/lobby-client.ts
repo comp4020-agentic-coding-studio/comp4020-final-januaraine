@@ -1,4 +1,4 @@
-import { colorFor, renderArena } from "./arena-render";
+import { colorFor, readPalette, renderArena } from "./arena-render";
 import type { SerializedArena } from "../game/arena";
 import { GRID_SIZE } from "../game/config";
 import type { RoomSummary } from "../lib/room-server";
@@ -9,18 +9,24 @@ export interface LobbyRefs {
   readonly listEl: HTMLElement;
   readonly emptyEl: HTMLElement;
   readonly searchInput: HTMLInputElement;
+  readonly searchButton: HTMLButtonElement;
   readonly prevButton: HTMLButtonElement;
   readonly nextButton: HTMLButtonElement;
   readonly pageLabel: HTMLElement;
   readonly dialog: HTMLDialogElement;
   readonly dialogRoomName: HTMLElement;
   readonly dialogCounts: HTMLElement;
+  readonly dialogCapacityDots: HTMLElement;
+  readonly dialogViewerCount: HTMLElement;
   readonly dialogError: HTMLElement;
   readonly joinPlayerButton: HTMLButtonElement;
+  readonly joinPlayerDesc: HTMLElement;
   readonly joinViewerButton: HTMLButtonElement;
   readonly dialogCancelButton: HTMLButtonElement;
   readonly initialRooms: readonly RoomSummary[];
 }
+
+const PLAYER_DESCRIPTION = "Control your own snake and compete for the leaderboard.";
 
 interface LobbyFrame {
   rooms: RoomSummary[];
@@ -93,7 +99,11 @@ export function initLobby(refs: LobbyRefs): () => void {
       previewBox.append(canvas);
       if (preview) {
         const ctx = canvas.getContext("2d");
-        if (ctx) renderArena(ctx, preview, PREVIEW_PX / GRID_SIZE);
+        // No explicit redraw-on-theme-change needed here, unlike
+        // room-client.ts's board: every card (canvas included) is already
+        // torn down and rebuilt from scratch on each ~400ms poll frame, so
+        // a toggle is reflected within one poll cycle regardless.
+        if (ctx) renderArena(ctx, preview, PREVIEW_PX / GRID_SIZE, readPalette());
       }
     } else {
       previewBox.classList.add("room-preview-locked");
@@ -110,21 +120,46 @@ export function initLobby(refs: LobbyRefs): () => void {
     return card;
   }
 
+  // Purely decorative (the text counts above already say the same thing
+  // accessibly) — one dot per Player slot, filled for an occupied one.
+  function renderCapacityDots(container: HTMLElement, playerCount: number, maxPlayers: number): void {
+    const dots = Array.from({ length: maxPlayers }, (_, i) => {
+      const dot = document.createElement("span");
+      dot.className = i < playerCount ? "capacity-dot filled" : "capacity-dot";
+      return dot;
+    });
+    container.replaceChildren(...dots);
+  }
+
   function openRoleSelector(room: RoomSummary): void {
     refs.dialogRoomName.textContent = room.name;
-    refs.dialogCounts.textContent = `${room.playerCount}/${room.maxPlayers} Players · ${room.viewerCount} Viewers`;
+    refs.dialogCounts.textContent = `${room.playerCount} / ${room.maxPlayers} Players`;
+    renderCapacityDots(refs.dialogCapacityDots, room.playerCount, room.maxPlayers);
+    refs.dialogViewerCount.textContent =
+      room.viewerCount === 1 ? "1 Viewer watching" : `${room.viewerCount} Viewers watching`;
     refs.dialogError.textContent = "";
     refs.dialogError.hidden = true;
 
+    // Player joining is always offered, explained when it's unavailable
+    // (reused server-authoritative reasons — see room-server.ts's joinRoom).
+    // Viewer joining has no equivalent capacity limit, so its only possible
+    // reason is a room setting, not a transient state — when that setting
+    // says no, the option is hidden entirely rather than shown disabled.
     const playerFull = room.playerCount >= room.maxPlayers;
     const playerLocked = room.locked && !room.youAreCreator;
-    refs.joinPlayerButton.disabled = playerFull || playerLocked;
-    refs.joinPlayerButton.title = playerLocked ? "Players are locked" : playerFull ? `Room is full (${room.maxPlayers}/${room.maxPlayers})` : "";
-    refs.joinPlayerButton.dataset.reason = refs.joinPlayerButton.title;
+    const playerBlockedReason = playerLocked
+      ? "Players are locked."
+      : playerFull
+        ? `Room is full (${room.maxPlayers}/${room.maxPlayers}).`
+        : "";
+    refs.joinPlayerButton.disabled = playerBlockedReason !== "";
+    refs.joinPlayerButton.classList.toggle("role-choice-blocked", playerBlockedReason !== "");
+    refs.joinPlayerButton.dataset.reason = playerBlockedReason;
+    refs.joinPlayerDesc.textContent = playerBlockedReason || PLAYER_DESCRIPTION;
 
-    refs.joinViewerButton.disabled = !room.allowViewers;
-    refs.joinViewerButton.title = room.allowViewers ? "" : "Viewers are not allowed in this room";
-    refs.joinViewerButton.dataset.reason = refs.joinViewerButton.title;
+    refs.joinViewerButton.hidden = !room.allowViewers;
+    refs.joinViewerButton.disabled = false;
+    refs.joinViewerButton.dataset.reason = "";
 
     refs.dialog.dataset.roomId = String(room.id);
     refs.dialog.showModal();
@@ -163,15 +198,32 @@ export function initLobby(refs: LobbyRefs): () => void {
   refs.joinViewerButton.addEventListener("click", () => void confirmJoin("viewer"));
   refs.dialogCancelButton.addEventListener("click", () => refs.dialog.close());
 
+  // The room-name field searches live as you type (debounced below) — the
+  // Search button and Enter key both just run that same search immediately,
+  // for whoever prefers to type first and trigger it deliberately. Neither
+  // path ever touches /api/rooms (room creation): that's the separate
+  // Create Room button's own handler, in arena.astro.
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  function runSearch(): void {
+    if (searchTimer) {
+      clearTimeout(searchTimer);
+      searchTimer = null;
+    }
+    search = refs.searchInput.value.trim();
+    page = 1;
+    openStream();
+  }
+
   refs.searchInput.addEventListener("input", () => {
     if (searchTimer) clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => {
-      search = refs.searchInput.value.trim();
-      page = 1;
-      openStream();
-    }, 250);
+    searchTimer = setTimeout(runSearch, 250);
   });
+  refs.searchInput.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    runSearch();
+  });
+  refs.searchButton.addEventListener("click", runSearch);
 
   refs.prevButton.addEventListener("click", () => {
     if (page <= 1) return;

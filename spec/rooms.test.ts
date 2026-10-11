@@ -242,7 +242,7 @@ describe("the five-Player cap, with no equivalent limit on Viewers", () => {
 });
 
 describe("locked rooms", () => {
-  it("rejects a non-creator's Player join but still lets the creator play", async () => {
+  it("rejects a non-creator's Player join, including via the become-player endpoint directly", async () => {
     const creatorCookie = await newPlayerCookie();
     const created = await createRoomAs(creatorCookie, uniqueRoomName("Solo Room"), { locked: true });
     const roomId = created.roomId!;
@@ -252,12 +252,56 @@ describe("locked rooms", () => {
     expect(rejected.ok).toBe(false);
     expect(rejected.reason).toBe("players are locked");
 
-    // The creator can still become a Viewer and then a Player again — being
-    // locked only ever excludes *other* users.
-    const becomeViewer = await postAction(creatorCookie, `/api/rooms/${roomId}/become-viewer`);
-    expect(becomeViewer.ok).toBe(true);
-    const becomePlayer = await postAction(creatorCookie, `/api/rooms/${roomId}/become-player`);
-    expect(becomePlayer.ok).toBe(true);
+    // Room page never offers a non-creator this button in a locked room —
+    // this is the server-side half of that restriction (section 4): hiding
+    // the UI alone would not be enough.
+    await joinAs(otherCookie, roomId, "viewer");
+    const bypassAttempt = await postAction(otherCookie, `/api/rooms/${roomId}/become-player`);
+    expect(bypassAttempt.ok).toBe(false);
+    expect(bypassAttempt.reason).toBe("players are locked");
+  });
+
+  it("lets the creator keep playing a locked room — respawning after elimination never costs them their Player slot", async () => {
+    const creatorCookie = await newPlayerCookie();
+    const creatorName = await displayNameFor(creatorCookie);
+    const created = await createRoomAs(creatorCookie, uniqueRoomName("Solo Respawn"), { locked: true });
+    const roomId = created.roomId!;
+
+    const stream = await openRoomStream(creatorCookie, roomId);
+    // Unsteered, every snake drifts into the wall within gridSize ticks.
+    await stream.read((f) => f.arena.snakes.every((s) => s.displayName !== creatorName), 4000);
+
+    const respawned = await postAction(creatorCookie, `/api/rooms/${roomId}/respawn`);
+    expect(respawned.ok).toBe(true);
+    await stream.read((f) => f.arena.snakes.some((s) => s.isMine));
+    stream.close();
+
+    const listRes = await fetch(new URL(`/api/rooms?q=Solo+Respawn`, baseUrl));
+    const { rooms } = await listRes.json();
+    expect(rooms.find((r: { id: number }) => r.id === roomId)).toBeDefined();
+  }, 10_000);
+
+  it("closes a locked room the moment its creator — its only possible Player — switches to Viewer", async () => {
+    const creatorCookie = await newPlayerCookie();
+    const created = await createRoomAs(creatorCookie, uniqueRoomName("Solo Steps Down"), { locked: true });
+    const roomId = created.roomId!;
+
+    const stream = await openRoomStream(creatorCookie, roomId);
+    await stream.read(() => true);
+
+    // Section 4: a locked room losing its last Player follows the same
+    // closure/notification policy as section 1 — being locked doesn't carve
+    // out an exception for its own creator stepping back from playing.
+    const switched = await postAction(creatorCookie, `/api/rooms/${roomId}/become-viewer`);
+    expect(switched.ok).toBe(true);
+
+    const closedEvent = (await stream.readEvent("closed", 2000)) as { reason: string };
+    expect(closedEvent.reason).toBeTruthy();
+    stream.close();
+
+    const listRes = await fetch(new URL(`/api/rooms?q=Solo+Steps+Down`, baseUrl));
+    const { rooms } = await listRes.json();
+    expect(rooms.find((r: { id: number }) => r.id === roomId)).toBeUndefined();
   });
 
   it("still allows Viewers when public viewing is enabled on a locked room", async () => {
@@ -390,10 +434,46 @@ describe("player death, respawn, and leaving", () => {
   );
 });
 
-describe("creator departure and room cleanup", () => {
-  it("closes the room when its creator explicitly leaves, notifying other open sessions", async () => {
+// Room lifetime is Player-count-based, not creator-based and not
+// member-count-based — see
+// docs/decisions/ADR-004-room-closes-when-the-last-player-leaves.md, which
+// supersedes ADR-003's "any member keeps it alive" rule (ADR-003's own
+// "creator isn't special" point still holds; these tests cover both: a
+// creator leaving is never special-cased, and a room now closes on zero
+// Players even with Viewers still present).
+describe("room lifetime: closes on zero Players, not zero members", () => {
+  it("stays open when the creator leaves but another Player remains", async () => {
     const creatorCookie = await newPlayerCookie();
-    const created = await createRoomAs(creatorCookie, uniqueRoomName("Closing Room"));
+    const created = await createRoomAs(creatorCookie, uniqueRoomName("Creator Steps Out"));
+    const roomId = created.roomId!;
+
+    const otherPlayerCookie = await newPlayerCookie();
+    await joinAs(otherPlayerCookie, roomId, "player");
+    const otherStream = await openRoomStream(otherPlayerCookie, roomId);
+    await otherStream.read(() => true);
+
+    const leaveResult = await postAction(creatorCookie, `/api/rooms/${roomId}/leave`);
+    expect(leaveResult.status).toBe(200);
+
+    // The room is still alive: still listed, still joinable, and the
+    // remaining Player's own stream keeps receiving ordinary frames rather
+    // than a "closed" event.
+    const frameAfter = await otherStream.read(() => true, 1500);
+    expect(frameAfter.room.id).toBe(roomId);
+    otherStream.close();
+
+    const listRes = await fetch(new URL(`/api/rooms?q=Creator+Steps+Out`, baseUrl));
+    const { rooms } = await listRes.json();
+    expect(rooms.find((r: { id: number }) => r.id === roomId)).toBeDefined();
+
+    const anotherCookie = await newPlayerCookie();
+    const rejoin = await joinAs(anotherCookie, roomId, "player");
+    expect(rejoin.ok).toBe(true);
+  });
+
+  it("closes the room once its last Player leaves, even though a Viewer remains, and notifies that Viewer first", async () => {
+    const creatorCookie = await newPlayerCookie();
+    const created = await createRoomAs(creatorCookie, uniqueRoomName("Last Player Out"));
     const roomId = created.roomId!;
 
     const viewerCookie = await newPlayerCookie();
@@ -401,13 +481,16 @@ describe("creator departure and room cleanup", () => {
     const viewerStream = await openRoomStream(viewerCookie, roomId);
     await viewerStream.read(() => true);
 
-    await postAction(creatorCookie, `/api/rooms/${roomId}/leave`);
+    // The creator is this room's only Player — their departure drops it to
+    // zero Players even though the Viewer never left.
+    const leaveResult = await postAction(creatorCookie, `/api/rooms/${roomId}/leave`);
+    expect(leaveResult.status).toBe(200);
 
     const closedEvent = (await viewerStream.readEvent("closed", 2000)) as { reason: string };
     expect(closedEvent.reason).toBeTruthy();
     viewerStream.close();
 
-    const listRes = await fetch(new URL(`/api/rooms?q=Closing+Room`, baseUrl));
+    const listRes = await fetch(new URL(`/api/rooms?q=Last+Player+Out`, baseUrl));
     const { rooms } = await listRes.json();
     expect(rooms.find((r: { id: number }) => r.id === roomId)).toBeUndefined();
 
@@ -416,26 +499,147 @@ describe("creator departure and room cleanup", () => {
     expect(joinAfterClose.reason).toBe("room not found");
   });
 
+  it("closes the room when its last Player switches to Viewer instead of leaving, notifying every Viewer including the switcher", async () => {
+    const creatorCookie = await newPlayerCookie();
+    const created = await createRoomAs(creatorCookie, uniqueRoomName("Player Swaps Role"));
+    const roomId = created.roomId!;
+
+    const viewerCookie = await newPlayerCookie();
+    await joinAs(viewerCookie, roomId, "viewer");
+    const viewerStream = await openRoomStream(viewerCookie, roomId);
+    await viewerStream.read(() => true);
+
+    const creatorStream = await openRoomStream(creatorCookie, roomId);
+    await creatorStream.read(() => true);
+
+    // The creator is the only Player; switching themself to Viewer, not
+    // leaving, must drop the room to zero Players just the same.
+    const switched = await postAction(creatorCookie, `/api/rooms/${roomId}/become-viewer`);
+    expect(switched.ok).toBe(true);
+
+    const [viewerClosed, creatorClosed] = await Promise.all([
+      viewerStream.readEvent("closed", 2000) as Promise<{ reason: string }>,
+      creatorStream.readEvent("closed", 2000) as Promise<{ reason: string }>,
+    ]);
+    expect(viewerClosed.reason).toBeTruthy();
+    expect(creatorClosed.reason).toBeTruthy();
+    viewerStream.close();
+    creatorStream.close();
+
+    const listRes = await fetch(new URL(`/api/rooms?q=Player+Swaps+Role`, baseUrl));
+    const { rooms } = await listRes.json();
+    expect(rooms.find((r: { id: number }) => r.id === roomId)).toBeUndefined();
+  });
+
+  it("is idempotent: leaving twice, or leaving an already-closed room, is a harmless no-op", async () => {
+    const creatorCookie = await newPlayerCookie();
+    const created = await createRoomAs(creatorCookie, uniqueRoomName("Double Leave"));
+    const roomId = created.roomId!;
+
+    const first = await postAction(creatorCookie, `/api/rooms/${roomId}/leave`);
+    expect(first.status).toBe(200);
+    // Second call for the same (already-departed) member, same room, now
+    // already closed since the creator was its only member.
+    const second = await postAction(creatorCookie, `/api/rooms/${roomId}/leave`);
+    expect(second.status).toBe(200);
+
+    // A stray departure signal for a room that closed for an unrelated
+    // reason must not error either (e.g. a duplicate sendBeacon arriving
+    // after someone else's last-member departure already closed it).
+    const thirdPartyCookie = await newPlayerCookie();
+    const stray = await postAction(thirdPartyCookie, `/api/rooms/${roomId}/leave`);
+    expect(stray.status).toBe(200);
+  });
+
   it(
-    "closes the room when its creator disconnects and never reconnects",
+    "disconnecting past the grace window with no reconnect only closes the room if that was the last member",
     async () => {
       const creatorCookie = await newPlayerCookie();
-      const created = await createRoomAs(creatorCookie, uniqueRoomName("Creator Vanishes"));
+      const created = await createRoomAs(creatorCookie, uniqueRoomName("Vanishes Alone"));
       const roomId = created.roomId!;
 
       const creatorStream = await openRoomStream(creatorCookie, roomId);
       await creatorStream.read(() => true);
-      creatorStream.close();
+      creatorStream.close(); // no reconnect follows, and nobody else is in the room
 
-      // Longer than the test run's shortened disconnect-grace window.
       await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
 
-      const listRes = await fetch(new URL(`/api/rooms?q=Creator+Vanishes`, baseUrl));
+      const listRes = await fetch(new URL(`/api/rooms?q=Vanishes+Alone`, baseUrl));
       const { rooms } = await listRes.json();
       expect(rooms.find((r: { id: number }) => r.id === roomId)).toBeUndefined();
     },
     10_000,
   );
+
+  it(
+    "disconnecting past the grace window closes the room if that was the last Player, even with a Viewer still present",
+    async () => {
+      const creatorCookie = await newPlayerCookie();
+      const created = await createRoomAs(creatorCookie, uniqueRoomName("Drops With Viewer"));
+      const roomId = created.roomId!;
+
+      const viewerCookie = await newPlayerCookie();
+      await joinAs(viewerCookie, roomId, "viewer");
+      const viewerStream = await openRoomStream(viewerCookie, roomId);
+      await viewerStream.read(() => true);
+
+      const creatorStream = await openRoomStream(creatorCookie, roomId);
+      await creatorStream.read(() => true);
+      creatorStream.close(); // no reconnect follows, and the creator was the only Player
+
+      const closedEvent = (await viewerStream.readEvent("closed", 2000)) as { reason: string };
+      expect(closedEvent.reason).toBeTruthy();
+      viewerStream.close();
+
+      const listRes = await fetch(new URL(`/api/rooms?q=Drops+With+Viewer`, baseUrl));
+      const { rooms } = await listRes.json();
+      expect(rooms.find((r: { id: number }) => r.id === roomId)).toBeUndefined();
+    },
+    10_000,
+  );
+
+  it(
+    "disconnecting past the grace window does not close the room when a Player is still present",
+    async () => {
+      const creatorCookie = await newPlayerCookie();
+      const created = await createRoomAs(creatorCookie, uniqueRoomName("Grace Keeps Player"));
+      const roomId = created.roomId!;
+
+      const viewerCookie = await newPlayerCookie();
+      await joinAs(viewerCookie, roomId, "viewer");
+      const viewerStream = await openRoomStream(viewerCookie, roomId);
+      await viewerStream.read(() => true);
+      viewerStream.close(); // no reconnect follows, but the creator is still a Player
+
+      await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+
+      const listRes = await fetch(new URL(`/api/rooms?q=Grace+Keeps+Player`, baseUrl));
+      const { rooms } = await listRes.json();
+      expect(rooms.find((r: { id: number }) => r.id === roomId)).toBeDefined();
+    },
+    10_000,
+  );
+
+  it("keeps a leaderboard record written before a room closes", async () => {
+    const cookie = await newPlayerCookie();
+    const name = await displayNameFor(cookie);
+    const created = await createRoomAs(cookie, uniqueRoomName("Score Then Close"));
+    const roomId = created.roomId!;
+
+    const stream = await openRoomStream(cookie, roomId);
+    await stream.read((f) => f.arena.snakes.some((s) => s.isMine));
+    // Unsteered, every snake drifts into the wall within gridSize ticks.
+    await stream.read((f) => f.arena.snakes.every((s) => s.displayName !== name), 4000);
+    stream.close();
+
+    // The sole member leaving now closes the room — the recorded game must
+    // not be affected by that.
+    await postAction(cookie, `/api/rooms/${roomId}/leave`);
+
+    const leaderboard = await fetch(new URL(`/api/leaderboard?player=${encodeURIComponent(name)}`, baseUrl));
+    const { entries } = await leaderboard.json();
+    expect(entries.some((e: { displayName: string }) => e.displayName === name)).toBe(true);
+  }, 10_000);
 });
 
 describe("concurrent attempts to claim the final Player slot", () => {

@@ -215,6 +215,14 @@ interface RankedRow {
 // which run represents a player. The player/date filters narrow which runs
 // are even candidates for that per-player ranking, so filtering, dedupe and
 // sort stay in the one query instead of a partial frontend re-derivation.
+//
+// `sort` must only change the *display order* of the Top N, not which N
+// players those are: membership is always decided by score DESC, LIMIT
+// first (the inner `top` CTE below), and only then does the outer SELECT
+// re-order that already-fixed set for `sort=asc`. Applying sortDirection
+// before LIMIT instead would make "Lowest score first" fetch the lowest
+// scores out of every candidate (a different, bottom-of-the-barrel set),
+// not the same Top N players shown in reverse.
 export function listLeaderboard(filters: LeaderboardFilters = {}): LeaderboardEntry[] {
   const limit = filters.limit ?? 10;
   const sortDirection = filters.sort === "asc" ? sql`ASC` : sql`DESC`;
@@ -258,12 +266,17 @@ export function listLeaderboard(filters: LeaderboardFilters = {}): LeaderboardEn
         ) AS rn
       FROM candidates c
       JOIN players p ON p.id = c.player_id
+    ),
+    top AS (
+      SELECT gameId, playerId, displayName, score, survivalTimeMs, finishedAt
+      FROM ranked
+      WHERE ${sql.join(conditions, sql` AND `)}
+      ORDER BY score DESC, finishedAt ASC, gameId ASC
+      LIMIT ${limit}
     )
     SELECT gameId, playerId, displayName, score, survivalTimeMs, finishedAt
-    FROM ranked
-    WHERE ${sql.join(conditions, sql` AND `)}
+    FROM top
     ORDER BY score ${sortDirection}, finishedAt ASC, gameId ASC
-    LIMIT ${limit}
   `);
 
   return rows.map((row) => ({

@@ -1,14 +1,14 @@
 # Snake Arena
 
-A grid-based Snake game you can play in the browser with no sign-up — alone,
-or in a shared arena with whoever else has it open right now. C8 was the
-single-player core; this is the **C9 ("all at once")** milestone on top of
-it: the server now runs one authoritative shared arena that every connected
-player's moves, collisions, and eliminations affect in real time, alongside
-the original single-player mode, which is untouched. Every finished run —
-solo or multiplayer — is recorded against an anonymous, server-issued
-identity, and the leaderboard it feeds survives a reload, a restart, and a
-redeploy.
+A grid-based Snake game you can play in the browser with no sign-up, in a
+shared arena with whoever else is in the room right now. C8 was a
+single-player core; **C9 ("all at once")** replaced it with the current
+multiplayer game, where the server runs an authoritative arena that every
+connected player's moves, collisions, and eliminations affect in real time.
+The single-player entry has since been retired — `/play/` now redirects to
+the Arena lobby. Every finished run is recorded against an anonymous,
+server-issued identity, and the leaderboard it feeds survives a reload, a
+restart, and a redeploy.
 
 ## Who it's for
 
@@ -18,14 +18,12 @@ onboarding, no commitment past one game.
 
 ## How to play
 
-Open `/play/` for the original single-player mode, or `/arena/` for the
-real-time shared one — steer with the arrow keys or `W` `A` `S` `D` either
-way. Eating the amber dot grows your snake and adds to your score; hitting a
-wall, your own tail, or (in the arena) another player's snake ends your run.
-In `/play/`, press **Restart** to go again. In `/arena/`, other players'
-snakes move and react in real time with no reload, and a **Respawn** button
-appears the moment you're eliminated. Your result is saved the instant a run
-ends — solo or multiplayer — and shows up on `/leaderboard/`.
+Open `/arena/` to join or create a room, then steer with the arrow keys or
+`W` `A` `S` `D`. Eating the amber dot grows your snake and adds to your
+score; hitting a wall, your own tail, or another player's snake ends your
+run. Other players' snakes move and react in real time with no reload, and a
+**Respawn** button appears the moment you're eliminated. Your result is
+saved the instant a run ends and shows up on `/leaderboard/`.
 
 ## What "good" means for this app, this week
 
@@ -72,8 +70,9 @@ is trusted to assert about itself. Concretely:
   and behave differently on purpose — see
   [`docs/decisions/ADR-001-realtime-multiplayer.md`](docs/decisions/ADR-001-realtime-multiplayer.md)
   for the reasoning, the alternatives considered, and what this choice costs
-- none of this changes C8's bar: `/play/`, single-player, is unmodified and
-  still client-driven exactly as it was
+- none of this changed C8's bar at the time: single-player stayed untouched
+  and client-driven exactly as it was, running alongside the arena. (A later
+  cleanup has since retired that single-player entry — see "How to play".)
 
 ## Design decisions
 
@@ -142,23 +141,24 @@ src/
                arena (the multiplayer rules: per-player snakes sharing one
                board and one food item, tickArena()) — no DOM, no framework
   frontend/    the only layer that touches the DOM: keyboard input, canvas
-               rendering, the single-player loop, and the arena client
-               (an EventSource plus its own renderer)
+               rendering, and the arena client (an EventSource plus its own
+               renderer)
   lib/         backend: schema (Drizzle), persistence, session identity,
                and arena-server (the in-memory shared arena, its SSE
                broadcast, and the server-side tick loop)
-  pages/       Astro pages (landing, play, arena, leaderboard, readme) and
+  pages/       Astro pages (landing, arena, leaderboard, readme) and
                the pages/api/ routes (session, games, leaderboard, health,
                arena/stream, arena/input, arena/respawn)
 ```
 
-`src/frontend/loop.ts` is single-player's own client-side loop, and C9 left
-it exactly as it was — rather than replacing it, the realtime arena got its
-own seam, `src/frontend/arena-client.ts`: an `EventSource` that renders
-whatever arena frame the server broadcasts and `POST`s each direction change
-to `/api/arena/input` instead of calling `setDirection` locally. `game/*`
-and `frontend/render.ts` didn't change at all; `game/arena.ts` and
-`frontend/arena-render.ts` are new, separate modules alongside them.
+`src/frontend/loop.ts` and `src/frontend/render.ts` were single-player's own
+client-side loop and renderer — C9 left them in place rather than replacing
+them, since the realtime arena got its own seam instead
+(`src/frontend/arena-client.ts`). A later cleanup retired the single-player
+route entirely and removed both files along with it, once nothing else
+referenced them. `game/*` was unaffected either time: `game/arena.ts` and
+`frontend/arena-render.ts` are the separate multiplayer modules that sit
+alongside it.
 
 ## Data model
 

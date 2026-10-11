@@ -20,10 +20,26 @@ let cookie: string;
 beforeAll(async () => {
   // Visiting any page mints the anonymous player identity — this is the
   // backend's "player/session creation" step, done server-side before any
-  // game is played.
-  const res = await fetch(new URL("/play/", baseUrl));
+  // game is played. /play/ no longer exists (it redirects to /arena/, the
+  // multiplayer lobby — see src/pages/play.astro); /arena/ itself still
+  // mints a session the same way /play/ used to.
+  const res = await fetch(new URL("/arena/", baseUrl));
   expect(res.status).toBe(200);
   cookie = sessionCookie(res);
+});
+
+describe("the retired single-player route", () => {
+  it("redirects /play/ to the Arena lobby rather than serving the old game or 404ing", async () => {
+    const res = await fetch(new URL("/play/", baseUrl), { redirect: "manual" });
+    expect(res.status).toBe(301);
+    expect(new URL(res.headers.get("location")!, baseUrl).pathname).toBe("/arena/");
+  });
+
+  it("still lands on a working, 200 page when a client follows that redirect", async () => {
+    const res = await fetch(new URL("/play/", baseUrl));
+    expect(res.status).toBe(200);
+    expect(res.url).toBe(new URL("/arena/", baseUrl).toString());
+  });
 });
 
 describe("anonymous player identity", () => {

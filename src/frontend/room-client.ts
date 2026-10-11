@@ -1,5 +1,5 @@
 import { attachKeyboardControls } from "./input";
-import { renderArena } from "./arena-render";
+import { readPalette, renderArena } from "./arena-render";
 import type { RoomFrame } from "../lib/room-server";
 import type { Direction } from "../game/types";
 
@@ -26,16 +26,38 @@ export interface RoomClientHandle {
 // whatever direction it's given and the server is the one that silently
 // ignores a Viewer's input (src/lib/room-server.ts's submitRoomInput).
 export function createRoomClient(options: RoomClientOptions): RoomClientHandle {
-  const ctx = options.canvas.getContext("2d");
-  if (!ctx) throw new Error("canvas 2D context unavailable");
+  const context = options.canvas.getContext("2d");
+  if (!context) throw new Error("canvas 2D context unavailable");
+  // Re-bound with an explicit type: TS doesn't carry the above null-check's
+  // narrowing into the nested `draw` function declaration below, since a
+  // function declaration is hoisted and could in principle be called
+  // before this point — `ctx` here is annotated, not narrowed, so it stays
+  // non-null everywhere it's captured.
+  const ctx: CanvasRenderingContext2D = context;
 
   let lastKnownScore = 0;
   let present = false;
+  // The last frame actually drawn — kept so a theme toggle can redraw
+  // immediately against the new palette instead of waiting for the next
+  // SSE tick (still only ~120ms away in practice, but "redraw when the
+  // theme changes" per the brief means an explicit redraw, not a
+  // coincidence of tick timing).
+  let lastFrame: RoomFrame | null = null;
+
+  function draw(frame: RoomFrame): void {
+    renderArena(ctx, frame.arena, options.cellPx, readPalette());
+  }
+
+  const onThemeChange = (): void => {
+    if (lastFrame) draw(lastFrame);
+  };
+  window.addEventListener("themechange", onThemeChange);
 
   const source = new EventSource(`/api/rooms/${options.roomId}/stream`);
   source.onmessage = (event: MessageEvent<string>) => {
     const frame = JSON.parse(event.data) as RoomFrame;
-    renderArena(ctx, frame.arena, options.cellPx);
+    lastFrame = frame;
+    draw(frame);
     options.onFrame(frame);
 
     const mine = frame.arena.snakes.find((s) => s.isMine);
@@ -70,6 +92,7 @@ export function createRoomClient(options: RoomClientOptions): RoomClientHandle {
     sendDirection,
     stop(): void {
       detachKeyboard();
+      window.removeEventListener("themechange", onThemeChange);
       source.close();
     },
   };
@@ -89,7 +112,10 @@ async function postAction(roomId: number, action: string): Promise<{ ok: boolean
 export const respawn = (roomId: number) => postAction(roomId, "respawn");
 export const becomeViewer = (roomId: number) => postAction(roomId, "become-viewer");
 export const becomePlayer = (roomId: number) => postAction(roomId, "become-player");
-export const leaveRoom = (roomId: number) => postAction(roomId, "leave");
+// Leaving is no longer a button — see room/[id].astro's own departure
+// handling (sendBeacon/pagehide/the Back button), which talks to
+// /api/rooms/:id/leave directly for keepalive/beacon control this plain
+// postAction wrapper doesn't offer.
 export const joinRoom = (roomId: number, role: "player" | "viewer") =>
   fetch(`/api/rooms/${roomId}/join`, {
     method: "POST",

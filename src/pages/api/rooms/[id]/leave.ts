@@ -7,9 +7,10 @@ function jsonResponse(status: number, body: unknown): Response {
 }
 
 // Explicit departure — immediate, no disconnect-grace window (that's only
-// for an unplanned connection drop). If the caller is the room's creator,
-// leaveRoom closes the whole room (see ADR-002's lifecycle policy); a
-// non-creator leaving only removes their own membership.
+// for an unplanned connection drop). The creator has no special standing
+// here: leaveRoom closes the room only if this departure drops it to zero
+// Players (see docs/decisions/ADR-004-room-closes-when-the-last-player-leaves.md),
+// whether or not the caller created it.
 export const POST: APIRoute = ({ params, cookies }) => {
   const roomId = Number(params.id);
   if (!Number.isInteger(roomId)) return jsonResponse(400, { ok: false, reason: "invalid room id" });

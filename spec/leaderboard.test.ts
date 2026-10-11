@@ -22,7 +22,9 @@ function sessionCookie(res: Response): string {
 }
 
 async function newPlayerCookie(): Promise<string> {
-  const res = await fetch(new URL("/play/", baseUrl));
+  // /play/ (the old single-player entry) no longer exists — it redirects to
+  // /arena/, which mints a session the same way /play/ used to.
+  const res = await fetch(new URL("/arena/", baseUrl));
   expect(res.status).toBe(200);
   return sessionCookie(res);
 }

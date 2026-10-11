@@ -67,16 +67,22 @@ const activeFilters = [
 <!doctype html>
 <html lang="en-AU">
   <head>
+    <script is:inline>
+      try {
+        if (localStorage.getItem("theme") === "light") document.documentElement.dataset.theme = "light";
+      } catch {}
+    </script>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Leaderboard — Snake Arena</title>
   </head>
   <body>
     <nav aria-label="site">
-      <a href="/">Snake Arena</a>
+      <a href="/" class="brand">Snake Arena</a>
       <a href="/arena/">Arena</a>
       <a href="/leaderboard/">Leaderboard</a>
       <a href="/readme/">About</a>
+      <button type="button" class="theme-toggle" data-action="toggle-theme">Light mode</button>
     </nav>
     <main>
       <h1>Leaderboard</h1>

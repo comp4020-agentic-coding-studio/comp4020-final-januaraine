@@ -1,9 +1,14 @@
 ---
 // A single room's game view: canvas, D-pad (Players only), separate
-// Players/Viewers membership lists, role-switch and leave actions, and the
-// post-death panel. Membership itself lives only in src/lib/room-server.ts's
-// in-memory registry (same place the game state does) — this page reads it
-// directly at request time, same process, no extra round trip.
+// Players/Viewers membership lists, and one consolidated contextual action
+// panel (Become Player/Become Viewer/Respawn — never duplicated). There is
+// no `Leave Room` button: leaving a room means navigating away from this
+// page, and the Back button plus the departure-signal script below are what
+// actually release membership (see docs/decisions/ADR-003 for the
+// intentional-departure-vs-disconnection distinction this relies on).
+// Membership itself lives only in src/lib/room-server.ts's in-memory
+// registry (same place the game state does) — this page reads it directly
+// at request time, same process, no extra round trip.
 import { getOrCreatePlayer } from "../../lib/session";
 import { getMemberRole, getRoomSummary, type RoomSummary } from "../../lib/room-server";
 import "../../styles.css";
@@ -28,13 +33,13 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
   </head>
   <body>
     <nav aria-label="site">
-      <a href="/">Snake Arena</a>
+      <a href="/" class="brand">Snake Arena</a>
       <a href="/arena/">Arena</a>
       <a href="/leaderboard/">Leaderboard</a>
       <a href="/readme/">About</a>
       <button type="button" class="theme-toggle" data-action="toggle-theme">Light mode</button>
     </nav>
-    <main>
+    <main class="room-page-main">
       {
         !room && (
           <div class="panel" role="alert">
@@ -79,8 +84,23 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
 
       {
         room && yourRole && (
-          <div class="arena-layout" id="room-view" data-room-id={room.id}>
-            <div class="arena-board">
+          <div class="room-layout" id="room-view" data-room-id={room.id}>
+            <div class="room-header">
+              <button type="button" id="back-button" class="button back-button" aria-label="Leave this room and go back">
+                <span aria-hidden="true">&larr;</span> Back
+              </button>
+              <h1 class="room-header-title" title={room.name}>
+                {room.name}
+                {room.locked && (
+                  <span class="room-lock-icon" aria-label="Locked: player joining disabled">
+                    {" "}
+                    🔒
+                  </span>
+                )}
+              </h1>
+            </div>
+
+            <div class="room-main">
               <canvas id="board" width="480" height="480" aria-label={`${room.name} game board`} />
               <div class="dpad" role="group" aria-label="Movement controls" hidden={yourRole !== "player"}>
                 <div class="dpad-row">
@@ -101,51 +121,39 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
                 </div>
               </div>
             </div>
-            <div class="hud">
-              <div class="hud-row">
-                <span>Room</span>
-                <strong>{room.name}</strong>
-              </div>
-              <div class="hud-row">
-                <span>Your role</span>
-                <strong id="your-role">{yourRole === "player" ? "Player" : "Viewer"}</strong>
-              </div>
-              <div class="hud-row">
-                <span>Score</span>
-                <strong id="score">0</strong>
-              </div>
-              <p id="status-banner" data-status="connecting">
-                Connecting…
-              </p>
 
-              <div class="role-actions">
-                <button type="button" id="become-player-button" class="button primary" hidden>
-                  Become Player
-                </button>
-                <button type="button" id="become-viewer-button" class="button" hidden>
-                  Become Viewer
-                </button>
-                <button type="button" id="leave-room-button" class="button danger">
-                  Leave Room
-                </button>
-              </div>
-              <p id="role-action-error" class="form-error" role="alert" hidden />
+            <div class="room-sidebar">
+              <div class="panel room-status-panel">
+                <div class="hud-row">
+                  <span>Your role</span>
+                  <strong id="your-role">{yourRole === "player" ? "Player" : "Viewer"}</strong>
+                </div>
+                <div class="hud-row">
+                  <span>Score</span>
+                  <strong id="score">0</strong>
+                </div>
+                <p id="status-banner" data-status="connecting">
+                  Connecting…
+                </p>
+                <p id="final-score-line" hidden>
+                  Final score: <strong id="final-score">0</strong> — already on the{" "}
+                  <a href="/leaderboard/">leaderboard</a>.
+                </p>
 
-              <div id="eliminated-panel" class="panel" hidden>
-                <h2>Eliminated</h2>
-                <p>Final score: <strong id="final-score">0</strong></p>
-                <p>That run is already on the <a href="/leaderboard/">leaderboard</a>.</p>
-                <div class="role-dialog-actions">
-                  <button id="respawn-button" class="button primary" type="button">
+                <div class="room-actions">
+                  {
+                    !room.locked && (
+                      <button type="button" id="role-toggle-button" class="button role-toggle" hidden>
+                        <span class="role-toggle-label">Become Viewer</span>
+                      </button>
+                    )
+                  }
+                  <button type="button" id="respawn-button" class="button primary" hidden>
                     Respawn
                   </button>
-                  <button id="death-become-viewer-button" class="button" type="button">
-                    Become Viewer
-                  </button>
-                  <button id="death-leave-button" class="button danger" type="button">
-                    Leave Room
-                  </button>
                 </div>
+                <p id="role-toggle-reason" class="action-reason" hidden />
+                <p id="role-action-error" class="form-error" role="alert" hidden />
               </div>
 
               <div class="panel players-panel">
@@ -215,13 +223,8 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
       room && yourRole && (
         <script>
           import { attachDpad } from "../../frontend/dpad";
-          import {
-            becomePlayer,
-            becomeViewer,
-            createRoomClient,
-            leaveRoom,
-            respawn,
-          } from "../../frontend/room-client";
+          import { becomePlayer, becomeViewer, createRoomClient, respawn } from "../../frontend/room-client";
+          import { computeRoleToggleState } from "../../frontend/room-role-toggle";
           import type { RoomFrame } from "../../lib/room-server";
           import { GRID_SIZE } from "../../game/config";
 
@@ -229,6 +232,7 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
           const roomId = Number(roomView.dataset.roomId);
           const canvas = document.getElementById("board") as HTMLCanvasElement;
           const dpad = document.querySelector<HTMLElement>(".dpad")!;
+          const backButton = document.getElementById("back-button") as HTMLButtonElement;
           const scoreEl = document.getElementById("score")!;
           const statusEl = document.getElementById("status-banner")!;
           const yourRoleEl = document.getElementById("your-role")!;
@@ -236,17 +240,96 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
           const viewersHeading = document.getElementById("viewers-heading")!;
           const playersList = document.getElementById("players-list")!;
           const viewersList = document.getElementById("viewers-list")!;
-          const becomePlayerButton = document.getElementById("become-player-button") as HTMLButtonElement;
-          const becomeViewerButton = document.getElementById("become-viewer-button") as HTMLButtonElement;
-          const leaveButton = document.getElementById("leave-room-button") as HTMLButtonElement;
-          const roleActionError = document.getElementById("role-action-error")!;
-          const eliminatedPanel = document.getElementById("eliminated-panel")!;
-          const finalScoreEl = document.getElementById("final-score")!;
+          // Absent entirely (not just hidden) for a locked/solo room — see
+          // the server-rendered conditional above — so every reference here
+          // has to tolerate null rather than assume the element exists.
+          const roleToggleButton = document.getElementById("role-toggle-button") as HTMLButtonElement | null;
+          const roleToggleLabel = roleToggleButton?.querySelector<HTMLElement>(".role-toggle-label") ?? null;
+          const roleToggleReason = document.getElementById("role-toggle-reason")!;
           const respawnButton = document.getElementById("respawn-button") as HTMLButtonElement;
-          const deathBecomeViewerButton = document.getElementById("death-become-viewer-button") as HTMLButtonElement;
-          const deathLeaveButton = document.getElementById("death-leave-button") as HTMLButtonElement;
+          const roleActionError = document.getElementById("role-action-error")!;
+          const finalScoreLine = document.getElementById("final-score-line")!;
+          const finalScoreEl = document.getElementById("final-score")!;
           const closedPanel = document.getElementById("room-closed-panel")!;
           const closedReason = document.getElementById("room-closed-reason")!;
+
+          // ---- intentional-departure membership release -------------------
+          // See docs/decisions/ADR-003: any of these firing removes this
+          // member immediately (no grace window — that's only for an
+          // unplanned disconnect). `released` is a same-page, same-tick
+          // guard against sending the (already server-side idempotent)
+          // signal more than once for one departure; it is not what makes
+          // the cleanup correct, just what keeps it polite.
+          let released = false;
+          function release(): void {
+            if (released) return;
+            released = true;
+            navigator.sendBeacon(`/api/rooms/${roomId}/leave`);
+          }
+          async function releaseAwaited(): Promise<void> {
+            if (released) return;
+            released = true;
+            try {
+              await fetch(`/api/rooms/${roomId}/leave`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                keepalive: true,
+              });
+            } catch {
+              // Best-effort — the disconnect-grace fallback and pagehide's
+              // sendBeacon below both still cover this if it fails.
+            }
+          }
+
+          // Any same-origin link click anywhere on the page (the nav bar's
+          // Arena/Leaderboard/About/logo links, the "leaderboard" link in
+          // the final-score line, anything else added later) counts as
+          // navigating away — one generic rule rather than an enumerated
+          // list of specific links. sendBeacon is fire-and-forget by
+          // design, so this never delays the click's own navigation.
+          document.addEventListener(
+            "click",
+            (event) => {
+              const link = (event.target as HTMLElement).closest("a");
+              if (!link || !link.href) return;
+              try {
+                if (new URL(link.href, location.href).origin === location.origin) release();
+              } catch {
+                /* not a parseable URL — ignore */
+              }
+            },
+            { capture: true },
+          );
+
+          // The best-effort net for refresh/tab-close/history navigation —
+          // more reliable than beforeunload (which mobile Safari can skip
+          // and which can block the back/forward cache). No awaited fetch
+          // here: a `pagehide` handler isn't guaranteed time to await
+          // anything before the document actually goes away.
+          window.addEventListener("pagehide", release);
+
+          backButton.addEventListener("click", async () => {
+            await releaseAwaited();
+            let cameFromInApp = false;
+            try {
+              cameFromInApp = Boolean(document.referrer) && new URL(document.referrer).origin === location.origin;
+            } catch {
+              cameFromInApp = false;
+            }
+            if (cameFromInApp && window.history.length > 1) history.back();
+            else window.location.href = "/arena/";
+          });
+
+          // ---- gameplay/membership wiring (unchanged mechanics) -----------
+
+          // Set for the duration of one role-toggle request — guards against
+          // a duplicate submission (the button is also disabled while this
+          // is true) and against renderMembers flipping the label back to
+          // the pre-click role on a frame that hasn't caught up yet. Cleared
+          // once the request settles either way; the next frame (success or
+          // not) then redraws the button from whatever the server actually
+          // did, never from a client-side guess.
+          let rolePending = false;
 
           function showActionError(reason: string | undefined): void {
             roleActionError.textContent = reason ?? "That action couldn't be completed.";
@@ -264,6 +347,7 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
                 ...members.map((m) => {
                   const li = document.createElement("li");
                   const label = document.createElement("span");
+                  label.title = m.displayName;
                   label.textContent = `${m.displayName}${m.isMine ? " (you)" : ""}${m.connected ? "" : " (reconnecting…)"}`;
                   li.append(label);
                   return li;
@@ -273,17 +357,40 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
             renderList(playersList, players);
             renderList(viewersList, viewers);
 
-            becomePlayerButton.hidden = frame.yourRole !== "viewer";
-            becomePlayerButton.disabled =
-              (frame.room.locked && !frame.members.some((m) => m.isMine)) || players.length >= 5;
-            becomeViewerButton.hidden = frame.yourRole !== "player";
+            const amIEliminated = frame.yourRole === "player" && !frame.arena.snakes.some((s) => s.isMine);
+            const playerFull = players.length >= 5;
+
+            respawnButton.hidden = !(frame.yourRole === "player" && amIEliminated);
+
+            // Absent entirely for a locked room (see the conditional in the
+            // markup above) — nothing to render in that case. While a
+            // request is in flight, leave the button exactly as the click
+            // handler set it rather than letting this frame (still showing
+            // the pre-switch role) flip it back.
+            if (roleToggleButton && roleToggleLabel && !rolePending) {
+              const state = computeRoleToggleState({
+                locked: frame.room.locked,
+                yourRole: frame.yourRole,
+                playerCount: players.length,
+              });
+              roleToggleButton.hidden = state.hidden;
+              roleToggleButton.dataset.targetRole = state.targetRole;
+              roleToggleLabel.textContent = state.label;
+              roleToggleButton.disabled = state.disabled;
+              roleToggleReason.hidden = state.reason === "";
+              roleToggleReason.textContent = state.reason;
+            }
+
+            respawnButton.disabled = playerFull && !frame.members.some((m) => m.isMine);
+            finalScoreLine.hidden = !(frame.yourRole === "player" && amIEliminated);
             yourRoleEl.textContent = frame.yourRole === "player" ? "Player" : "Viewer";
           }
 
           function onFrame(frame: RoomFrame): void {
             roleActionError.hidden = true;
-            statusEl.textContent = "Playing";
-            statusEl.dataset.status = "playing";
+            const eliminated = frame.yourRole === "player" && !frame.arena.snakes.some((s) => s.isMine);
+            statusEl.textContent = eliminated ? "Eliminated" : "Playing";
+            statusEl.dataset.status = eliminated ? "eliminated" : "playing";
             const mine = frame.arena.snakes.find((s) => s.isMine);
             scoreEl.textContent = String(mine?.score ?? 0);
             renderMembers(frame);
@@ -291,15 +398,21 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
 
           function onEliminated(finalScore: number): void {
             finalScoreEl.textContent = String(finalScore);
-            statusEl.textContent = "Eliminated";
-            statusEl.dataset.status = "eliminated";
-            eliminatedPanel.hidden = false;
           }
+
+          // A brief opportunity to actually read the reason (ADR-004) before
+          // this Viewer is sent back to the lobby automatically — the panel
+          // and its own "Back to the Arena Lobby" link stay as a fallback
+          // for anyone who navigates away before the timer fires.
+          const CLOSED_REDIRECT_MS = 4000;
 
           function onClosed(reason: string): void {
             roomView.hidden = true;
             closedPanel.hidden = false;
             closedReason.textContent = reason;
+            setTimeout(() => {
+              window.location.href = "/arena/";
+            }, CLOSED_REDIRECT_MS);
           }
 
           const client = createRoomClient({
@@ -312,35 +425,27 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
           });
           const detachDpad = attachDpad(dpad, client.sendDirection);
 
-          becomePlayerButton.addEventListener("click", async () => {
-            becomePlayerButton.disabled = true;
-            const result = await becomePlayer(roomId);
+          roleToggleButton?.addEventListener("click", async () => {
+            if (rolePending) return;
+            rolePending = true;
+            roleToggleButton.disabled = true;
+            roleActionError.hidden = true;
+            const targetRole = roleToggleButton.dataset.targetRole;
+            const result = targetRole === "player" ? await becomePlayer(roomId) : await becomeViewer(roomId);
+            rolePending = false;
             if (!result.ok) showActionError(result.reason);
-            becomePlayerButton.disabled = false;
-          });
-          becomeViewerButton.addEventListener("click", async () => {
-            await becomeViewer(roomId);
-          });
-          leaveButton.addEventListener("click", async () => {
-            await leaveRoom(roomId);
-            window.location.href = "/arena/";
+            // Whether this succeeded or was rejected, the next SSE frame
+            // (already on its way — the room's tick loop broadcasts well
+            // under a second from now) redraws the button from authoritative
+            // state; this handler never sets the label itself.
           });
           respawnButton.addEventListener("click", async () => {
             respawnButton.disabled = true;
-            eliminatedPanel.hidden = true;
             await respawn(roomId);
             respawnButton.disabled = false;
           });
-          deathBecomeViewerButton.addEventListener("click", async () => {
-            eliminatedPanel.hidden = true;
-            await becomeViewer(roomId);
-          });
-          deathLeaveButton.addEventListener("click", async () => {
-            await leaveRoom(roomId);
-            window.location.href = "/arena/";
-          });
 
-          window.addEventListener("beforeunload", () => {
+          window.addEventListener("pagehide", () => {
             client.stop();
             detachDpad();
           });

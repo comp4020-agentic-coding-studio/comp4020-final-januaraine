@@ -5,40 +5,51 @@ import "../styles.css";
 <!doctype html>
 <html lang="en-AU">
   <head>
+    <script is:inline>
+      try {
+        if (localStorage.getItem("theme") === "light") document.documentElement.dataset.theme = "light";
+      } catch {}
+    </script>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Snake Arena</title>
   </head>
   <body>
     <nav aria-label="site">
-      <a href="/">Snake Arena</a>
+      <a href="/" class="brand">Snake Arena</a>
       <a href="/arena/">Arena</a>
       <a href="/leaderboard/">Leaderboard</a>
       <a href="/readme/">About</a>
+      <button type="button" class="theme-toggle" data-action="toggle-theme">Light mode</button>
     </nav>
     <main>
       <h1>Snake Arena</h1>
       <p>
-        A grid-based Snake game, playable right now with no sign-up. This first
-        version is solo: you against the wall, your own tail, and the
-        leaderboard. A later version adds other snakes on the same board at
-        the same time — the rules here are already built to grow into that.
+        A grid-based Snake game, playable right now with no sign-up — share a
+        board with whoever else is in the room, watch as a Viewer if you'd
+        rather spectate, and climb the leaderboard as you go.
       </p>
       <div class="panel">
         <h2>How to play</h2>
         <p>
-          Steer with the arrow keys or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd>
-          <kbd>D</kbd>. Eat the amber dot to grow and score; hitting a wall or
-          your own tail ends the game. Press Restart to go again.
+          Join or create a room in the Arena lobby, then steer with the arrow
+          keys or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>. Eat the
+          amber dot to grow and score; hitting a wall, your own tail, or
+          another snake ends your run — a Respawn button appears the moment
+          you're eliminated.
         </p>
-        <a class="button primary" href="/play/">Play now</a>
+        <a class="button primary" href="/arena/">Go to the Arena</a>
       </div>
       <p>
         Every finished game is recorded under an anonymous player name the
         server assigns you (something like <em>Player A7F3</em>) — no account,
-        no email, just enough identity to put your run on the
+        no email, just enough identity to put your run on the{" "}
         <a href="/leaderboard/">leaderboard</a>.
       </p>
     </main>
+    <script>
+      import { initThemeToggle } from "../frontend/theme";
+      initThemeToggle();
+    </script>
   </body>
 </html>

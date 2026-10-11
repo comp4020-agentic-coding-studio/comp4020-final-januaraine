@@ -29,7 +29,7 @@ const initialRooms: RoomSummary[] = listRooms({ limit: 20 })
   </head>
   <body>
     <nav aria-label="site">
-      <a href="/">Snake Arena</a>
+      <a href="/" class="brand">Snake Arena</a>
       <a href="/arena/">Arena</a>
       <a href="/leaderboard/">Leaderboard</a>
       <a href="/readme/">About</a>
@@ -40,10 +40,13 @@ const initialRooms: RoomSummary[] = listRooms({ limit: 20 })
       <p>Join a room to play or watch, or create your own. Rooms update live as players come and go.</p>
 
       <div class="lobby-toolbar">
-        <label class="lobby-search">
-          <span class="sr-only">Search rooms by name</span>
-          <input id="room-search" type="search" placeholder="Search rooms by name…" />
-        </label>
+        <div class="lobby-search-group">
+          <label class="lobby-search">
+            <span class="sr-only">Search rooms by name</span>
+            <input id="room-search" type="search" placeholder="Search rooms by name…" />
+          </label>
+          <button type="button" id="room-search-button" class="button">Search</button>
+        </div>
         <button type="button" class="button primary" data-action="open-create-room">Create Room</button>
       </div>
 
@@ -77,14 +80,38 @@ const initialRooms: RoomSummary[] = listRooms({ limit: 20 })
         <button type="button" id="rooms-next" class="button">Next</button>
       </div>
 
-      <dialog id="role-dialog" class="role-dialog">
-        <h2 id="role-dialog-room-name"></h2>
-        <p id="role-dialog-counts"></p>
+      <dialog id="role-dialog" class="role-dialog" aria-labelledby="role-dialog-title">
+        <button type="button" id="role-dialog-cancel" class="dialog-dismiss" aria-label="Cancel and close this dialog">
+          ✕
+        </button>
+        <h2 id="role-dialog-title" class="role-dialog-title">Join room</h2>
+        <p id="role-dialog-room-name" class="role-dialog-room-name"></p>
+
+        <div class="role-dialog-capacity">
+          <span id="role-dialog-counts" class="role-dialog-counts"></span>
+          <span id="role-dialog-capacity-dots" class="capacity-dots" aria-hidden="true"></span>
+        </div>
+        <p id="role-dialog-viewer-count" class="role-dialog-viewer-count"></p>
+
         <p id="role-dialog-error" class="form-error" role="alert" hidden></p>
-        <div class="role-dialog-actions">
-          <button type="button" id="join-as-player" class="button primary">Join as Player</button>
-          <button type="button" id="join-as-viewer" class="button">Join as Viewer</button>
-          <button type="button" id="role-dialog-cancel" class="button">Cancel</button>
+
+        <div class="role-choices">
+          <button type="button" id="join-as-player" class="role-choice role-choice-player">
+            <span class="role-choice-icon" aria-hidden="true">🎮</span>
+            <span class="role-choice-text">
+              <span class="role-choice-title">Join as Player</span>
+              <span class="role-choice-desc" id="join-as-player-desc">
+                Control your own snake and compete for the leaderboard.
+              </span>
+            </span>
+          </button>
+          <button type="button" id="join-as-viewer" class="role-choice role-choice-viewer">
+            <span class="role-choice-icon" aria-hidden="true">👁</span>
+            <span class="role-choice-text">
+              <span class="role-choice-title">Join as Viewer</span>
+              <span class="role-choice-desc">Watch the match live without playing.</span>
+            </span>
+          </button>
         </div>
       </dialog>
     </main>
@@ -146,14 +173,18 @@ const initialRooms: RoomSummary[] = listRooms({ limit: 20 })
         listEl: document.getElementById("rooms-list")!,
         emptyEl: document.getElementById("rooms-empty")!,
         searchInput: document.getElementById("room-search") as HTMLInputElement,
+        searchButton: document.getElementById("room-search-button") as HTMLButtonElement,
         prevButton: document.getElementById("rooms-prev") as HTMLButtonElement,
         nextButton: document.getElementById("rooms-next") as HTMLButtonElement,
         pageLabel: document.getElementById("rooms-page-label")!,
         dialog: document.getElementById("role-dialog") as HTMLDialogElement,
         dialogRoomName: document.getElementById("role-dialog-room-name")!,
         dialogCounts: document.getElementById("role-dialog-counts")!,
+        dialogCapacityDots: document.getElementById("role-dialog-capacity-dots")!,
+        dialogViewerCount: document.getElementById("role-dialog-viewer-count")!,
         dialogError: document.getElementById("role-dialog-error")!,
         joinPlayerButton: document.getElementById("join-as-player") as HTMLButtonElement,
+        joinPlayerDesc: document.getElementById("join-as-player-desc")!,
         joinViewerButton: document.getElementById("join-as-viewer") as HTMLButtonElement,
         dialogCancelButton: document.getElementById("role-dialog-cancel") as HTMLButtonElement,
         initialRooms: JSON.parse(document.getElementById("initial-rooms-data")!.textContent!) as RoomSummary[],
