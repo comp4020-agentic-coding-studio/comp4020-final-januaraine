@@ -1,11 +1,14 @@
 ---
 // A single room's game view: canvas, D-pad (Players only), separate
 // Players/Viewers membership lists, and one consolidated contextual action
-// panel (Become Player/Become Viewer/Respawn — never duplicated). There is
-// no `Leave Room` button: leaving a room means navigating away from this
-// page, and the Back button plus the departure-signal script below are what
-// actually release membership (see docs/decisions/ADR-003 for the
-// intentional-departure-vs-disconnection distinction this relies on).
+// panel (Become Player/Become Viewer — never duplicated). Respawn lives in
+// its own game-over overlay directly on the canvas instead — on an
+// eliminated Player's phone that's the only control reachable without
+// scrolling away from the board. There is no `Leave Room` button: leaving a
+// room means navigating away from this page, and the Back button plus the
+// departure-signal script below are what actually release membership (see
+// docs/decisions/ADR-003 for the intentional-departure-vs-disconnection
+// distinction this relies on).
 // Membership itself lives only in src/lib/room-server.ts's in-memory
 // registry (same place the game state does) — this page reads it directly
 // at request time, same process, no extra round trip.
@@ -101,7 +104,21 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
             </div>
 
             <div class="room-main">
-              <canvas id="board" width="480" height="480" aria-label={`${room.name} game board`} />
+              <div class="arena-viewport">
+                <canvas id="board" width="480" height="480" aria-label={`${room.name} game board`} />
+                <div id="game-over-overlay" class="game-over-overlay" hidden>
+                  <div class="panel game-over-card">
+                    <p class="game-over-message">Eliminated</p>
+                    <p id="final-score-line" class="game-over-score">
+                      Final score: <strong id="final-score">0</strong> — already on the{" "}
+                      <a href="/leaderboard/">leaderboard</a>.
+                    </p>
+                    <button type="button" id="respawn-button" class="button primary">
+                      Respawn
+                    </button>
+                  </div>
+                </div>
+              </div>
               <div class="dpad" role="group" aria-label="Movement controls" hidden={yourRole !== "player"}>
                 <div class="dpad-row">
                   <button type="button" class="dpad-button" data-direction="up" aria-label="Move up">
@@ -137,10 +154,6 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
                 <p id="status-banner" data-status="connecting">
                   Connecting…
                 </p>
-                <p id="final-score-line" hidden>
-                  Final score: <strong id="final-score">0</strong> — already on the{" "}
-                  <a href="/leaderboard/">leaderboard</a>.
-                </p>
 
                 <div class="room-actions">
                   {
@@ -150,9 +163,6 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
                       </button>
                     )
                   }
-                  <button type="button" id="respawn-button" class="button primary" hidden>
-                    Respawn
-                  </button>
                 </div>
                 <p id="role-toggle-reason" class="action-reason" hidden />
                 <p id="role-action-error" class="form-error" role="alert" hidden />
@@ -248,9 +258,9 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
           const roleToggleButton = document.getElementById("role-toggle-button") as HTMLButtonElement | null;
           const roleToggleLabel = roleToggleButton?.querySelector<HTMLElement>(".role-toggle-label") ?? null;
           const roleToggleReason = document.getElementById("role-toggle-reason")!;
+          const gameOverOverlay = document.getElementById("game-over-overlay")!;
           const respawnButton = document.getElementById("respawn-button") as HTMLButtonElement;
           const roleActionError = document.getElementById("role-action-error")!;
-          const finalScoreLine = document.getElementById("final-score-line")!;
           const finalScoreEl = document.getElementById("final-score")!;
           const closedPanel = document.getElementById("room-closed-panel")!;
           const closedReason = document.getElementById("room-closed-reason")!;
@@ -362,7 +372,10 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
             const amIEliminated = frame.yourRole === "player" && !frame.arena.snakes.some((s) => s.isMine);
             const playerFull = players.length >= 5;
 
-            respawnButton.hidden = !(frame.yourRole === "player" && amIEliminated);
+            // amIEliminated already requires yourRole === "player", so this
+            // overlay (and its Respawn button) can never show to a Viewer —
+            // there's nothing for them to respawn from.
+            gameOverOverlay.hidden = !amIEliminated;
 
             // Absent entirely for a locked room (see the conditional in the
             // markup above) — nothing to render in that case. While a
@@ -384,7 +397,6 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
             }
 
             respawnButton.disabled = playerFull && !frame.members.some((m) => m.isMine);
-            finalScoreLine.hidden = !(frame.yourRole === "player" && amIEliminated);
             yourRoleEl.textContent = frame.yourRole === "player" ? "Player" : "Viewer";
           }
 
