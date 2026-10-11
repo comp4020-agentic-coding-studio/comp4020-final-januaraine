@@ -14,6 +14,9 @@ export interface ArenaClientOptions {
 
 export interface ArenaClientHandle {
   stop(): void;
+  /** The same validated-direction POST keyboard input already drives —
+   *  exposed so the D-pad goes through this one path, never a second one. */
+  sendDirection(direction: Direction): void;
 }
 
 // The realtime seam on the client: an EventSource for the server's broadcast
@@ -56,6 +59,7 @@ export function createArenaClient(options: ArenaClientOptions): ArenaClientHandl
   const detachKeyboard = attachKeyboardControls(sendDirection);
 
   return {
+    sendDirection,
     stop(): void {
       detachKeyboard();
       source.close();

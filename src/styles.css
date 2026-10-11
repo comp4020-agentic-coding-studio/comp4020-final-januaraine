@@ -45,6 +45,7 @@ a {
 
 nav[aria-label="site"] {
   display: flex;
+  flex-wrap: wrap;
   gap: 1.25rem;
   margin-bottom: 1.5rem;
   font-size: 0.9rem;
@@ -122,11 +123,17 @@ nav[aria-label="site"] a:focus-visible {
 
 .arena-board {
   flex: 0 0 auto;
+  min-width: 0;
 }
 
 #board {
   display: block;
-  width: min(100%, 480px);
+  /* 240px floor, 480px ceiling (the original desktop size, unchanged): a
+     20x20 grid at 240px is 12px/cell, the smallest this project considers
+     still comfortably playable and tappable, so it's a safety bound rather
+     than something a real phone (>=320px wide, ~288px of content width
+     after padding) should ever actually hit. */
+  width: clamp(240px, 100%, 480px);
   height: auto;
   aspect-ratio: 1 / 1;
   border-radius: 0.75rem;
@@ -150,9 +157,19 @@ nav[aria-label="site"] a:focus-visible {
   color: var(--muted);
 }
 
+.hud-row > * {
+  min-width: 0;
+}
+
 .hud-row strong {
   color: var(--text);
   font-size: 1.1rem;
+  /* A long display name truncates instead of widening the row — current
+     names ("Player A7F3") never hit this, but a row built from untrusted
+     display text shouldn't assume they always will. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 #status-banner {
@@ -185,6 +202,62 @@ nav[aria-label="site"] a:focus-visible {
 
 #game-over-panel[hidden] {
   display: none;
+}
+
+/* --- directional pad (touch / mouse movement controls) ------------------
+   Sits directly below the canvas, in normal flow, inside .arena-board — so
+   it can never overlap the board or the HUD, on any viewport width. Drives
+   the exact same input path keyboard already does (see
+   src/frontend/dpad.ts); this file only renders and reports presses. */
+
+.dpad {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  width: clamp(240px, 100%, 480px);
+}
+
+.dpad-row {
+  display: flex;
+  gap: 0.6rem;
+  /* Centering both rows within the same width aligns the lone "up" button
+     directly above the middle "down" button by symmetry — no extra spacer
+     element needed. */
+  justify-content: center;
+}
+
+.dpad-button {
+  /* 48-56px: a comfortable thumb target, while three per row plus gaps
+     still comfortably fit a 320px phone's content width (~288px). */
+  width: clamp(48px, 14vw, 56px);
+  height: clamp(48px, 14vw, 56px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.75rem;
+  border: 1px solid var(--accent-dim);
+  background: var(--panel);
+  color: var(--accent);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation; /* no double-tap zoom / pan from repeated taps */
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.dpad-button:hover,
+.dpad-button:focus-visible {
+  background: rgba(57, 255, 143, 0.1);
+}
+
+.dpad-button:active,
+.dpad-button.pressed {
+  background: var(--accent);
+  color: #06120b;
+  border-color: var(--accent);
 }
 
 /* --- leaderboard ------------------------------------------------------ */
@@ -340,6 +413,17 @@ tr.mine {
 
   .arena-layout {
     flex-direction: column;
+  }
+
+  /* Five nav links already wrap (flex-wrap is unconditional above) — this
+     just tightens them so they wrap to fewer, shorter lines on a phone. */
+  nav[aria-label="site"] {
+    gap: 0.5rem 0.9rem;
+    font-size: 0.82rem;
+  }
+
+  .controls-legend {
+    font-size: 0.78rem;
   }
 }
 

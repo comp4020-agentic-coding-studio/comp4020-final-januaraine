@@ -27,6 +27,16 @@ const player = getOrCreatePlayer(Astro.cookies);
       <div class="arena-layout">
         <div class="arena-board">
           <canvas id="board" width="480" height="480" aria-label="Snake Arena shared multiplayer board"></canvas>
+          <div class="dpad" role="group" aria-label="Movement controls">
+            <div class="dpad-row">
+              <button type="button" class="dpad-button" data-direction="up" aria-label="Move up">&uarr;</button>
+            </div>
+            <div class="dpad-row">
+              <button type="button" class="dpad-button" data-direction="left" aria-label="Move left">&larr;</button>
+              <button type="button" class="dpad-button" data-direction="down" aria-label="Move down">&darr;</button>
+              <button type="button" class="dpad-button" data-direction="right" aria-label="Move right">&rarr;</button>
+            </div>
+          </div>
         </div>
         <div class="hud">
           <div class="hud-row">
@@ -63,11 +73,13 @@ const player = getOrCreatePlayer(Astro.cookies);
     </main>
     <script>
       import { createArenaClient, respawn } from "../frontend/arena-client";
+      import { attachDpad } from "../frontend/dpad";
       import { colorFor } from "../frontend/arena-render";
       import { GRID_SIZE } from "../game/config";
       import type { SerializedArena } from "../game/arena";
 
       const canvas = document.getElementById("board") as HTMLCanvasElement;
+      const dpad = document.querySelector<HTMLElement>(".dpad")!;
       const scoreEl = document.getElementById("score")!;
       const statusEl = document.getElementById("status-banner")!;
       const eliminatedPanel = document.getElementById("eliminated-panel")!;
@@ -117,6 +129,7 @@ const player = getOrCreatePlayer(Astro.cookies);
         onState,
         onEliminated,
       });
+      const detachDpad = attachDpad(dpad, client.sendDirection);
 
       respawnButton.addEventListener("click", async () => {
         respawnButton.disabled = true;
@@ -125,7 +138,10 @@ const player = getOrCreatePlayer(Astro.cookies);
         respawnButton.disabled = false;
       });
 
-      window.addEventListener("beforeunload", () => client.stop());
+      window.addEventListener("beforeunload", () => {
+        client.stop();
+        detachDpad();
+      });
     </script>
   </body>
 </html>

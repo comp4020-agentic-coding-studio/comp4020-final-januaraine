@@ -11,6 +11,12 @@ export interface GameLoopHandle {
   /** Resets to a fresh "ready" board — does not start it. */
   restart(): void;
   stop(): void;
+  /**
+   * The same start-if-ready-then-queue-direction behaviour a keyboard press
+   * triggers, exposed so any other input source (the D-pad) drives the
+   * game through this one path rather than a second, parallel one.
+   */
+  handleDirection(direction: Direction): void;
 }
 
 export interface GameLoopOptions {
@@ -66,19 +72,23 @@ export function createGameLoop(options: GameLoopOptions): GameLoopHandle {
     publish();
   }
 
-  const detachKeyboard = attachKeyboardControls((direction: Direction) => {
-    // A direction key is also how a "ready" board begins — one keystroke
-    // both starts the game and sets its first direction, which is the move
-    // a player trying the game for the first time naturally makes.
+  function handleDirection(direction: Direction): void {
+    // A direction input is also how a "ready" board begins — one keystroke
+    // (or D-pad tap) both starts the game and sets its first direction,
+    // which is the move a player trying the game for the first time
+    // naturally makes.
     if (state.status === "ready") start();
     state = setDirection(state, direction);
-  });
+  }
+
+  const detachKeyboard = attachKeyboardControls(handleDirection);
 
   publish();
 
   return {
     start,
     restart,
+    handleDirection,
     stop(): void {
       stopInterval();
       detachKeyboard();
