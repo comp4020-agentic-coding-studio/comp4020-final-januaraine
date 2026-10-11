@@ -20,3 +20,11 @@ export const POINTS_PER_FOOD = 10;
 // any real match, short enough to keep a hand-built request from claiming a
 // multi-day survival time. (~1 hour at TICK_MS=120.)
 export const MAX_TICKS = 30_000;
+
+// Room capacity, shared the same way: src/lib/room-server.ts enforces it
+// server-side, and src/frontend/room-role-toggle.ts reads it client-side to
+// render "Room is full (5/5)". It has to live here rather than in
+// room-server.ts — that module imports src/lib/db.ts (better-sqlite3), which
+// crashes if a browser bundle ever pulls it in, and room-role-toggle.ts is
+// exactly such a bundle.
+export const MAX_PLAYERS = 5;

@@ -20,7 +20,7 @@
      board's original fixed look exactly (these were the hardcoded values
      before the board became theme-aware). */
   --board-bg: #0b0f14;
-  --board-grid: rgba(255, 255, 255, 0.04);
+  --board-grid: rgba(255, 255, 255, 0.14);
   --food: #ffb454;
   --mine-head: #39ff8f;
   --mine-body: #1fae5f;
@@ -390,7 +390,10 @@ nav[aria-label="site"] a:focus-visible {
    src/frontend/dpad.ts); this file only renders and reports presses. */
 
 .dpad {
-  display: flex;
+  /* Touch-only control: a desktop Player already has keyboard arrow keys
+     (see frontend/input.ts), so the D-pad only earns its screen space on
+     the same narrow/mobile layout .room-layout itself switches to below. */
+  display: none;
   flex-direction: column;
   align-items: center;
   gap: 0.5rem;
@@ -466,11 +469,13 @@ nav[aria-label="site"] a:focus-visible {
 .filter-field input,
 .filter-field select {
   font: inherit;
+  line-height: 1.5;
   color: var(--text);
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 0.5rem;
   padding: 0.5rem 0.6rem;
+  height: 2.5rem;
   min-width: 0;
 }
 
@@ -618,6 +623,12 @@ tr.mine {
 .room-layout {
   display: grid;
   grid-template-columns: minmax(0, 480px) minmax(18rem, 22rem);
+  /* The two columns' combined width is narrower than .room-page-main's
+     64rem cap (board-plus-sidebar tops out around 52rem), so without this
+     the grid — unlike every other page's single centered column — sits
+     flush left with empty space on the right instead of looking centered
+     on the page. */
+  justify-content: center;
   column-gap: 1.75rem;
   row-gap: 1.25rem;
   align-items: start;
@@ -694,6 +705,10 @@ tr.mine {
 @media (max-width: 860px) {
   .room-layout {
     grid-template-columns: 1fr;
+  }
+
+  .dpad:not([hidden]) {
+    display: flex;
   }
 
   .room-main {

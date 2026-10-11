@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_PLAYERS } from "../lib/room-server";
+import { MAX_PLAYERS } from "../game/config";
 import { computeRoleToggleState } from "./room-role-toggle";
 
 describe("computeRoleToggleState", () => {

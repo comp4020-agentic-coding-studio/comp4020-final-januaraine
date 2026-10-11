@@ -6,7 +6,7 @@
 // docs/decisions/ADR-002-room-based-multiplayer.md). One Fly machine, one
 // Node process (fly.toml's --ha=false), so — same as before — a module-level
 // Map is the whole story: no pub/sub, no cross-instance fan-out.
-import { TICK_MS } from "../game/config";
+import { MAX_PLAYERS, TICK_MS } from "../game/config";
 import {
   type ArenaState,
   createArena,
@@ -23,8 +23,6 @@ import { createRoom, deleteRoom, recordGameResult } from "./db";
 // Overridable so spec/rooms.test.ts doesn't have to wait out a real-world
 // grace window to prove the disconnect and room-closure rules.
 const DISCONNECT_GRACE_MS = Number(process.env.ARENA_DISCONNECT_GRACE_MS) || 5000;
-
-export const MAX_PLAYERS = 5;
 
 export type MemberRole = "player" | "viewer";
 

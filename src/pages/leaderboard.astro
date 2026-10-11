@@ -60,7 +60,6 @@ const activeFilters = [
   fieldValue("player") && `player contains "${fieldValue("player")}"`,
   fieldValue("from") && `finished on/after ${fieldValue("from")}`,
   fieldValue("to") && `finished on/before ${fieldValue("to")}`,
-  sortValue === "asc" && "lowest score first",
 ].filter((part): part is string => Boolean(part));
 ---
 
@@ -118,7 +117,6 @@ const activeFilters = [
           )}
         </div>
       </form>
-      <p class="filters-note">Dates use YYYY-MM-DD (UTC). Player search matches part of a name.</p>
       {activeFilters.length > 0 && errors.length === 0 && (
         <p class="active-filters">Filtering by: {activeFilters.join(", ")}.</p>
       )}
@@ -201,6 +199,17 @@ const activeFilters = [
     <script>
       const statusEl = document.getElementById("leaderboard-status")!;
       const deleteButton = document.querySelector<HTMLButtonElement>('[data-action="delete-me"]');
+
+      // Sort only reorders the already-fetched Top N (see db.ts's
+      // listLeaderboard) — unlike player/from/to, it narrows nothing — so
+      // there's no reason to make picking it a two-step "choose, then press
+      // Search" action the way a text/date filter reasonably is. Submitting
+      // the whole form (not just a sort-only request) keeps whatever
+      // player/from/to values are already filled in, instead of dropping
+      // them when sort changes.
+      const sortSelect = document.getElementById("sort") as HTMLSelectElement;
+      const filtersForm = document.querySelector<HTMLFormElement>(".leaderboard-filters")!;
+      sortSelect.addEventListener("change", () => filtersForm.requestSubmit());
 
       deleteButton?.addEventListener("click", async () => {
         // A native confirm() is a modal the browser itself renders — there's

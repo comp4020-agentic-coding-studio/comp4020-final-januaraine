@@ -1,4 +1,5 @@
-import { MAX_PLAYERS, type MemberRole } from "../lib/room-server";
+import { MAX_PLAYERS } from "../game/config";
+import type { MemberRole } from "../lib/room-server";
 
 // Pure state computation for the single role-toggle button on room/[id].astro
 // (see docs section 3/4 of the brief this was built against): one button
