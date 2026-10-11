@@ -86,9 +86,11 @@ export function renderArena(
 
   ctx.fillStyle = palette.food;
   const foodPad = cellPx * 0.18;
-  ctx.beginPath();
-  ctx.arc(state.food.x * cellPx + cellPx / 2, state.food.y * cellPx + cellPx / 2, cellPx / 2 - foodPad, 0, Math.PI * 2);
-  ctx.fill();
+  for (const food of state.food) {
+    ctx.beginPath();
+    ctx.arc(food.x * cellPx + cellPx / 2, food.y * cellPx + cellPx / 2, cellPx / 2 - foodPad, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   let otherIndex = 0;
   for (const snake of state.snakes) {
@@ -101,6 +103,26 @@ export function renderArena(
       ctx.fillRect(segment.x * cellPx + pad, segment.y * cellPx + pad, cellPx - pad * 2, cellPx - pad * 2);
     });
   }
+
+  // Eliminated snakes mid-fade: same body rendering, just faded by the
+  // server-computed opacity — no explosion/fragmentation, just a subtle
+  // disappearance everyone in the room sees identically (see arena.ts's
+  // DyingSnake/opacity). globalAlpha is restored immediately after so it
+  // never bleeds into anything drawn next frame.
+  const previousAlpha = ctx.globalAlpha;
+  let otherDyingIndex = 0;
+  for (const snake of state.dying) {
+    const [headColor, bodyColor] = snake.isMine
+      ? ([palette.mineHead, palette.mineBody] as const)
+      : colorFor(otherDyingIndex++, palette);
+    ctx.globalAlpha = previousAlpha * Math.max(0, Math.min(1, snake.opacity));
+    snake.segments.forEach((segment, index) => {
+      ctx.fillStyle = index === 0 ? headColor : bodyColor;
+      const pad = cellPx * 0.08;
+      ctx.fillRect(segment.x * cellPx + pad, segment.y * cellPx + pad, cellPx - pad * 2, cellPx - pad * 2);
+    });
+  }
+  ctx.globalAlpha = previousAlpha;
 }
 
 // Spread by a fixed angle rather than picked from a short fixed palette, so

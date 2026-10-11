@@ -4,9 +4,9 @@
 // board. src/lib/arena-server.ts is the only thing that calls this from
 // outside a test, on a server-side interval, the same way single-player's
 // loop.ts calls rules.ts's tick() from a client-side interval.
-import { POINTS_PER_FOOD, GRID_SIZE } from "./config";
+import { POINTS_PER_FOOD, GRID_SIZE, DEATH_FADE_TICKS } from "./config";
 import { hitsSelf, hitsWall } from "./collision";
-import { randomEmptyCell } from "./food";
+import { eligibleDeathFoodCells, randomEmptyCell, tryRandomEmptyCell } from "./food";
 import { isValidDirectionChange, nextHeadPosition } from "./movement";
 import type { Direction, Point, RandomSource } from "./types";
 
@@ -20,13 +20,38 @@ export interface ArenaSnake {
   readonly ticks: number; // ticks survived since this snake joined/respawned
 }
 
-export interface ArenaState {
-  readonly snakes: { readonly [playerId: number]: ArenaSnake };
-  readonly food: Point;
-  readonly gridSize: number;
+// "spawn" is the one always-present ambient food the classic game has always
+// had — eaten, it's replaced via the existing random-spawn logic. "death" is
+// a one-shot cell left behind by an eliminated snake's body: eaten, it's
+// just gone, no replacement. Both grow/score a snake identically; the tag
+// only ever matters for the replace-or-don't decision in tickArena.
+export type FoodSource = "spawn" | "death";
+
+export interface FoodItem extends Point {
+  readonly source: FoodSource;
 }
 
 export type EliminationReason = "wall" | "self" | "snake";
+
+// An eliminated snake's frozen remains, visible to every client as a fading
+// body for DEATH_FADE_TICKS ticks before converting to food. `segments` is
+// the snake's last valid (on-grid) body — the pre-move body, not the fatal
+// head, so this stays a well-formed set of board cells for all three
+// elimination reasons (a wall death's "head" would otherwise be off-grid).
+export interface DyingSnake {
+  readonly playerId: number;
+  readonly displayName: string;
+  readonly segments: readonly Point[];
+  readonly reason: EliminationReason;
+  readonly ticksRemaining: number;
+}
+
+export interface ArenaState {
+  readonly snakes: { readonly [playerId: number]: ArenaSnake };
+  readonly dying: readonly DyingSnake[];
+  readonly food: readonly FoodItem[];
+  readonly gridSize: number;
+}
 
 export interface EliminatedPlayer {
   readonly playerId: number;
@@ -51,18 +76,39 @@ export interface SerializedArenaSnake {
   readonly isMine: boolean;
 }
 
-export interface SerializedArena {
-  readonly gridSize: number;
-  readonly food: Point;
-  readonly snakes: readonly SerializedArenaSnake[];
+// A dying snake's own wire shape — same "isMine" pattern as a live snake,
+// plus `opacity` (1 at the moment of death, fading to 0), computed
+// server-side from `ticksRemaining` so no client ever decides for itself how
+// far along the fade is.
+export interface SerializedDyingSnake {
+  readonly displayName: string;
+  readonly segments: readonly Point[];
+  readonly reason: EliminationReason;
+  readonly isMine: boolean;
+  readonly opacity: number;
 }
 
+export interface SerializedArena {
+  readonly gridSize: number;
+  readonly food: readonly FoodItem[];
+  readonly snakes: readonly SerializedArenaSnake[];
+  readonly dying: readonly SerializedDyingSnake[];
+}
+
+// Everything a spawn point (a new player, or a fresh food cell) must avoid:
+// every live snake's body, plus every still-fading corpse's — a brand-new
+// player or food item should never land on top of a death animation still
+// playing out.
 function allSegments(state: ArenaState): Point[] {
-  return Object.values(state.snakes).flatMap((snake) => snake.segments);
+  return [
+    ...Object.values(state.snakes).flatMap((snake) => snake.segments),
+    ...state.dying.flatMap((d) => d.segments),
+  ];
 }
 
 export function createArena(gridSize: number = GRID_SIZE, random: RandomSource = Math.random): ArenaState {
-  return { snakes: {}, food: randomEmptyCell(gridSize, [], random), gridSize };
+  const spawn = randomEmptyCell(gridSize, [], random);
+  return { snakes: {}, dying: [], food: [{ ...spawn, source: "spawn" }], gridSize };
 }
 
 // A fresh snake starts facing whichever of the four walls it's farthest
@@ -94,7 +140,7 @@ export function joinArena(
 ): ArenaState {
   if (state.snakes[playerId]) return state;
 
-  const occupied = [...allSegments(state), state.food];
+  const occupied = [...allSegments(state), ...state.food];
   const spawn = randomEmptyCell(state.gridSize, occupied, random);
   const direction = safeSpawnDirection(spawn, state.gridSize);
   const snake: ArenaSnake = {
@@ -129,14 +175,20 @@ export function setArenaDirection(state: ArenaState, playerId: number, direction
 // once. Collisions are evaluated against a single consistent snapshot of
 // the *pre-move* board (each snake's own about-to-be-vacated tail cell
 // already excluded, exactly like rules.ts's tick()) so the outcome doesn't
-// depend on which order snakes happen to be iterated in.
+// depend on which order snakes happen to be iterated in. A snake eliminated
+// this tick is immediately dropped from `snakes` — the live collision/
+// movement set — so it can never move or collide again, even mid-fade; its
+// frozen body goes into `dying` instead, purely for every client's fade
+// animation and for the eventual food conversion below.
 export function tickArena(state: ArenaState, random: RandomSource = Math.random): ArenaTickResult {
   const entries = Object.values(state.snakes);
-  if (entries.length === 0) return { state, eliminated: [] };
+  if (entries.length === 0 && state.dying.length === 0) {
+    return { state, eliminated: [] };
+  }
 
   const resolvedDirection = new Map<number, Direction>();
   const newHead = new Map<number, Point>();
-  const ateFood = new Map<number, boolean>();
+  const ateIndex = new Map<number, number>(); // index into state.food, -1 if none
   const bodyToCheck = new Map<number, readonly Point[]>();
 
   for (const snake of entries) {
@@ -148,9 +200,9 @@ export function tickArena(state: ArenaState, random: RandomSource = Math.random)
     const head = nextHeadPosition(snake.segments[0], direction);
     newHead.set(snake.playerId, head);
 
-    const ate = head.x === state.food.x && head.y === state.food.y;
-    ateFood.set(snake.playerId, ate);
-    bodyToCheck.set(snake.playerId, ate ? snake.segments : snake.segments.slice(0, -1));
+    const idx = state.food.findIndex((f) => f.x === head.x && f.y === head.y);
+    ateIndex.set(snake.playerId, idx);
+    bodyToCheck.set(snake.playerId, idx !== -1 ? snake.segments : snake.segments.slice(0, -1));
   }
 
   const eliminatedReason = new Map<number, EliminationReason>();
@@ -182,17 +234,74 @@ export function tickArena(state: ArenaState, random: RandomSource = Math.random)
 
   // Food is only actually consumed if a *surviving* snake reached it — a
   // mutual head-to-head collision on the food cell leaves it in place,
-  // since nobody lived to eat it.
-  const survivorAteFood = entries.some((s) => !eliminatedReason.has(s.playerId) && ateFood.get(s.playerId));
-  const newFood = survivorAteFood
-    ? randomEmptyCell(
-        state.gridSize,
-        entries.flatMap((s) =>
-          eliminatedReason.has(s.playerId) ? s.segments : [newHead.get(s.playerId)!, ...s.segments],
-        ),
-        random,
-      )
-    : state.food;
+  // since nobody lived to eat it. Removed highest-index-first so earlier
+  // indices stay valid mid-removal. Eating either source grows/scores the
+  // same; only a consumed "spawn" item ever gets replaced (death food is
+  // one-shot, see the FoodSource comment above).
+  let food: FoodItem[] = [...state.food];
+  const consumedDesc = entries
+    .filter((s) => !eliminatedReason.has(s.playerId) && ateIndex.get(s.playerId)! !== -1)
+    .map((s) => ateIndex.get(s.playerId)!)
+    .sort((a, b) => b - a);
+  let spawnReplacementsNeeded = 0;
+  for (const idx of consumedDesc) {
+    if (food[idx].source === "spawn") spawnReplacementsNeeded++;
+    food.splice(idx, 1);
+  }
+
+  // Surviving snakes' next bodies — needed for the final state and for what
+  // a death-food conversion below must avoid landing on.
+  const nextSegments = new Map<number, readonly Point[]>();
+  for (const snake of entries) {
+    if (eliminatedReason.has(snake.playerId)) continue;
+    const head = newHead.get(snake.playerId)!;
+    const grew = ateIndex.get(snake.playerId)! !== -1;
+    nextSegments.set(snake.playerId, grew ? [head, ...snake.segments] : [head, ...snake.segments.slice(0, -1)]);
+  }
+
+  // Advance every still-fading corpse; ones that just expired convert to
+  // food. `blocked` tracks every cell a new death-food cell must avoid —
+  // existing food, every surviving snake's new body, and every other corpse
+  // (fading or just-converted) — grown as each expiring snake's own cells
+  // are claimed, so two corpses expiring on the same tick (processed in a
+  // fixed playerId order for determinism) can never drop food on the same
+  // cell. A snake with no eligible cells at all just contributes none.
+  const decremented = state.dying.map((d) => ({ ...d, ticksRemaining: d.ticksRemaining - 1 }));
+  const stillDying = decremented.filter((d) => d.ticksRemaining > 0);
+  const expiring = decremented.filter((d) => d.ticksRemaining <= 0).sort((a, b) => a.playerId - b.playerId);
+
+  const blocked: Point[] = [...food, ...[...nextSegments.values()].flat(), ...stillDying.flatMap((d) => d.segments)];
+  for (const dead of expiring) {
+    for (const cell of eligibleDeathFoodCells(dead.segments, blocked)) {
+      food.push({ ...cell, source: "death" });
+      blocked.push(cell);
+    }
+  }
+
+  // Snakes eliminated this tick join the fade with a frozen, on-grid body
+  // (their pre-move segments — a wall death's fatal "head" would otherwise
+  // be off-grid, and every reason should produce a well-formed corpse).
+  const newlyDying: DyingSnake[] = entries
+    .filter((s) => eliminatedReason.has(s.playerId))
+    .map((s) => ({
+      playerId: s.playerId,
+      displayName: s.displayName,
+      segments: s.segments,
+      reason: eliminatedReason.get(s.playerId)!,
+      ticksRemaining: DEATH_FADE_TICKS,
+    }));
+
+  // Replace each consumed "spawn" item via the existing random-spawn logic,
+  // avoiding every cell now occupied (including the death food and corpses
+  // just added above). If the board is momentarily full, skip for this tick
+  // rather than crashing the room — it'll retry on the next one.
+  const occupiedForSpawn: Point[] = [...blocked, ...newlyDying.flatMap((d) => d.segments)];
+  for (let i = 0; i < spawnReplacementsNeeded; i++) {
+    const replacement = tryRandomEmptyCell(state.gridSize, occupiedForSpawn, random);
+    if (!replacement) break;
+    food.push({ ...replacement, source: "spawn" });
+    occupiedForSpawn.push(replacement);
+  }
 
   const snakes: Record<number, ArenaSnake> = {};
   const eliminated: EliminatedPlayer[] = [];
@@ -203,13 +312,11 @@ export function tickArena(state: ArenaState, random: RandomSource = Math.random)
       eliminated.push({ playerId: snake.playerId, score: snake.score, ticks: snake.ticks, reason });
       continue;
     }
-    const head = newHead.get(snake.playerId)!;
     const direction = resolvedDirection.get(snake.playerId)!;
-    const grew = survivorAteFood && ateFood.get(snake.playerId)!;
-    const segments = grew ? [head, ...snake.segments] : [head, ...snake.segments.slice(0, -1)];
+    const grew = ateIndex.get(snake.playerId)! !== -1;
     snakes[snake.playerId] = {
       ...snake,
-      segments,
+      segments: nextSegments.get(snake.playerId)!,
       direction,
       pendingDirection: direction,
       score: grew ? snake.score + POINTS_PER_FOOD : snake.score,
@@ -217,7 +324,10 @@ export function tickArena(state: ArenaState, random: RandomSource = Math.random)
     };
   }
 
-  return { state: { snakes, food: newFood, gridSize: state.gridSize }, eliminated };
+  return {
+    state: { snakes, dying: [...stillDying, ...newlyDying], food, gridSize: state.gridSize },
+    eliminated,
+  };
 }
 
 export function serializeArena(state: ArenaState, viewerPlayerId?: number): SerializedArena {
@@ -229,6 +339,13 @@ export function serializeArena(state: ArenaState, viewerPlayerId?: number): Seri
       segments: snake.segments,
       score: snake.score,
       isMine: snake.playerId === viewerPlayerId,
+    })),
+    dying: state.dying.map((d) => ({
+      displayName: d.displayName,
+      segments: d.segments,
+      reason: d.reason,
+      isMine: d.playerId === viewerPlayerId,
+      opacity: d.ticksRemaining / DEATH_FADE_TICKS,
     })),
   };
 }

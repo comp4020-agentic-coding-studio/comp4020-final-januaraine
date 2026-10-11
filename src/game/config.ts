@@ -21,6 +21,13 @@ export const POINTS_PER_FOOD = 10;
 // multi-day survival time. (~1 hour at TICK_MS=120.)
 export const MAX_TICKS = 30_000;
 
+// How long an eliminated snake's body stays on the board, faded out but not
+// yet collectible, before converting to food — the same tick clock as
+// gameplay itself rather than a second client-side timer, so every Player
+// and Viewer sees the exact same fade regardless of connection timing.
+// 4 * TICK_MS = 480ms, inside the ~400-600ms the brief asks for.
+export const DEATH_FADE_TICKS = 4;
+
 // Room capacity, shared the same way: src/lib/room-server.ts enforces it
 // server-side, and src/frontend/room-role-toggle.ts reads it client-side to
 // render "Room is full (5/5)". It has to live here rather than in

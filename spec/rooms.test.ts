@@ -97,7 +97,18 @@ interface RoomMemberFrame {
 }
 interface RoomFrame {
   room: { id: number; name: string; locked: boolean; allowViewers: boolean };
-  arena: { gridSize: number; food: { x: number; y: number }; snakes: { displayName: string; segments: { x: number; y: number }[]; score: number; isMine: boolean }[] };
+  arena: {
+    gridSize: number;
+    food: { x: number; y: number; source: "spawn" | "death" }[];
+    snakes: { displayName: string; segments: { x: number; y: number }[]; score: number; isMine: boolean }[];
+    dying: {
+      displayName: string;
+      segments: { x: number; y: number }[];
+      reason: "wall" | "self" | "snake";
+      isMine: boolean;
+      opacity: number;
+    }[];
+  };
   members: RoomMemberFrame[];
   yourRole: "player" | "viewer";
 }

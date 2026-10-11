@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { randomEmptyCell } from "./food";
+import { eligibleDeathFoodCells, randomEmptyCell, tryRandomEmptyCell } from "./food";
 
 // randomEmptyCell(gridSize, ...) scans a gridSize x gridSize board in
 // row-major order (y outer, x inner) to build its free-cell list — every
@@ -35,5 +35,54 @@ describe("randomEmptyCell", () => {
       { x: 1, y: 1 },
     ];
     expect(() => randomEmptyCell(2, everyCell, () => 0)).toThrow();
+  });
+});
+
+describe("tryRandomEmptyCell", () => {
+  it("picks the same way randomEmptyCell does when a cell is free", () => {
+    const occupied = [
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
+      { x: 0, y: 1 },
+    ];
+    expect(tryRandomEmptyCell(2, occupied, () => 0.5)).toEqual({ x: 1, y: 1 });
+  });
+
+  it("returns null instead of throwing when the board is full — a recoverable multiplayer state, not a bug", () => {
+    const everyCell = [
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
+      { x: 0, y: 1 },
+      { x: 1, y: 1 },
+    ];
+    expect(tryRandomEmptyCell(2, everyCell, () => 0)).toBeNull();
+  });
+});
+
+describe("eligibleDeathFoodCells", () => {
+  it("returns every segment untouched when nothing is occupied", () => {
+    const segments = [
+      { x: 1, y: 1 },
+      { x: 1, y: 2 },
+    ];
+    expect(eligibleDeathFoodCells(segments, [])).toEqual(segments);
+  });
+
+  it("excludes only the segments that overlap an occupied cell, preserving order", () => {
+    const segments = [
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
+      { x: 2, y: 0 },
+    ];
+    const occupied = [{ x: 1, y: 0 }]; // already food, another body, etc.
+    expect(eligibleDeathFoodCells(segments, occupied)).toEqual([
+      { x: 0, y: 0 },
+      { x: 2, y: 0 },
+    ]);
+  });
+
+  it("returns an empty list, not an error, when every cell is blocked", () => {
+    const segments = [{ x: 5, y: 5 }];
+    expect(eligibleDeathFoodCells(segments, [{ x: 5, y: 5 }])).toEqual([]);
   });
 });
