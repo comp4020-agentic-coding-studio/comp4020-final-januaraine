@@ -1,16 +1,28 @@
 ---
+// The Arena Lobby: the primary entry point for finding and joining rooms
+// (see docs/decisions/ADR-002-room-based-multiplayer.md). Server-renders the
+// first page of rooms so the lobby isn't blank before JS runs; lobby-client.ts
+// then takes over with the live SSE feed, search, pagination, and the
+// role-selector dialog.
+import { listRooms } from "../lib/db";
 import { getOrCreatePlayer } from "../lib/session";
+import { getRoomSummary, type RoomSummary } from "../lib/room-server";
 import "../styles.css";
 
-// Same server-side identity mint as /play/ — opening this page doesn't
-// itself join the arena (that happens when the script below opens the SSE
-// stream), but the cookie/player row has to exist first either way.
 const player = getOrCreatePlayer(Astro.cookies);
+const initialRooms: RoomSummary[] = listRooms({ limit: 20 })
+  .map((row) => getRoomSummary(row.id, player.id))
+  .filter((summary): summary is RoomSummary => summary !== null);
 ---
 
 <!doctype html>
 <html lang="en-AU">
   <head>
+    <script is:inline>
+      try {
+        if (localStorage.getItem("theme") === "light") document.documentElement.dataset.theme = "light";
+      } catch {}
+    </script>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Arena — Snake Arena</title>
@@ -18,129 +30,133 @@ const player = getOrCreatePlayer(Astro.cookies);
   <body>
     <nav aria-label="site">
       <a href="/">Snake Arena</a>
-      <a href="/play/">Play</a>
       <a href="/arena/">Arena</a>
       <a href="/leaderboard/">Leaderboard</a>
       <a href="/readme/">About</a>
+      <button type="button" class="theme-toggle" data-action="toggle-theme">Light mode</button>
     </nav>
     <main>
-      <div class="arena-layout">
-        <div class="arena-board">
-          <canvas id="board" width="480" height="480" aria-label="Snake Arena shared multiplayer board"></canvas>
-          <div class="dpad" role="group" aria-label="Movement controls">
-            <div class="dpad-row">
-              <button type="button" class="dpad-button" data-direction="up" aria-label="Move up">&uarr;</button>
-            </div>
-            <div class="dpad-row">
-              <button type="button" class="dpad-button" data-direction="left" aria-label="Move left">&larr;</button>
-              <button type="button" class="dpad-button" data-direction="down" aria-label="Move down">&darr;</button>
-              <button type="button" class="dpad-button" data-direction="right" aria-label="Move right">&rarr;</button>
-            </div>
-          </div>
-        </div>
-        <div class="hud">
-          <div class="hud-row">
-            <span>Player</span>
-            <strong id="player-name">{player.displayName}</strong>
-          </div>
-          <div class="hud-row">
-            <span>Score</span>
-            <strong id="score">0</strong>
-          </div>
-          <p id="status-banner" data-status="connecting">Connecting…</p>
-          <div class="controls-legend">
-            <p>
-              Move: <kbd>&uarr;</kbd> <kbd>&darr;</kbd> <kbd>&larr;</kbd> <kbd>&rarr;</kbd> or
-              <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>
-            </p>
-            <p>
-              A shared board — everyone here sees the same arena. Eat the amber dot to grow and score. Don't hit a
-              wall, your own tail, or run head-on into another snake.
-            </p>
-          </div>
-          <div id="eliminated-panel" class="panel" hidden>
-            <h2>Eliminated</h2>
-            <p>Final score: <strong id="final-score">0</strong></p>
-            <p>That run is already on the <a href="/leaderboard/">leaderboard</a>.</p>
-            <button id="respawn-button" class="button primary" type="button">Respawn</button>
-          </div>
-          <div class="panel players-panel">
-            <h2>Players</h2>
-            <ul id="players-list"></ul>
-          </div>
-        </div>
+      <h1>Arena Lobby</h1>
+      <p>Join a room to play or watch, or create your own. Rooms update live as players come and go.</p>
+
+      <div class="lobby-toolbar">
+        <label class="lobby-search">
+          <span class="sr-only">Search rooms by name</span>
+          <input id="room-search" type="search" placeholder="Search rooms by name…" />
+        </label>
+        <button type="button" class="button primary" data-action="open-create-room">Create Room</button>
       </div>
+
+      <form id="create-room-form" class="panel create-room-form" hidden>
+        <h2>Create Room</h2>
+        <div class="filter-field">
+          <label for="room-name">Room name</label>
+          <input id="room-name" name="name" type="text" required maxlength="40" autocomplete="off" />
+        </div>
+        <label class="checkbox-field">
+          <input id="room-locked" name="locked" type="checkbox" />
+          Lock player joining (solo play — only you can be a Player)
+        </label>
+        <label class="checkbox-field">
+          <input id="room-allow-viewers" name="allowViewers" type="checkbox" checked />
+          Allow public viewers
+        </label>
+        <p id="create-room-error" class="form-error" role="alert" hidden></p>
+        <div class="filter-actions">
+          <button type="submit" class="button primary">Create</button>
+          <button type="button" class="button" data-action="cancel-create-room">Cancel</button>
+        </div>
+      </form>
+
+      <p id="rooms-empty" class="panel" hidden>No rooms match your search — create one above.</p>
+      <div id="rooms-list" class="rooms-grid" role="list" aria-label="Rooms"></div>
+
+      <div class="lobby-pager">
+        <button type="button" id="rooms-prev" class="button" disabled>Previous</button>
+        <span id="rooms-page-label">Page 1</span>
+        <button type="button" id="rooms-next" class="button">Next</button>
+      </div>
+
+      <dialog id="role-dialog" class="role-dialog">
+        <h2 id="role-dialog-room-name"></h2>
+        <p id="role-dialog-counts"></p>
+        <p id="role-dialog-error" class="form-error" role="alert" hidden></p>
+        <div class="role-dialog-actions">
+          <button type="button" id="join-as-player" class="button primary">Join as Player</button>
+          <button type="button" id="join-as-viewer" class="button">Join as Viewer</button>
+          <button type="button" id="role-dialog-cancel" class="button">Cancel</button>
+        </div>
+      </dialog>
     </main>
     <script>
-      import { createArenaClient, respawn } from "../frontend/arena-client";
-      import { attachDpad } from "../frontend/dpad";
-      import { colorFor } from "../frontend/arena-render";
-      import { GRID_SIZE } from "../game/config";
-      import type { SerializedArena } from "../game/arena";
+      import { initThemeToggle } from "../frontend/theme";
+      initThemeToggle();
+    </script>
+    <script type="application/json" id="initial-rooms-data" set:html={JSON.stringify(initialRooms)} />
+    <script>
+      import { initLobby } from "../frontend/lobby-client";
+      import type { RoomSummary } from "../lib/room-server";
 
-      const canvas = document.getElementById("board") as HTMLCanvasElement;
-      const dpad = document.querySelector<HTMLElement>(".dpad")!;
-      const scoreEl = document.getElementById("score")!;
-      const statusEl = document.getElementById("status-banner")!;
-      const eliminatedPanel = document.getElementById("eliminated-panel")!;
-      const finalScoreEl = document.getElementById("final-score")!;
-      const respawnButton = document.getElementById("respawn-button") as HTMLButtonElement;
-      const playersList = document.getElementById("players-list")!;
+      const createButton = document.querySelector<HTMLButtonElement>('[data-action="open-create-room"]')!;
+      const createForm = document.getElementById("create-room-form") as HTMLFormElement;
+      const createError = document.getElementById("create-room-error")!;
+      const cancelCreate = document.querySelector<HTMLButtonElement>('[data-action="cancel-create-room"]')!;
 
-      function renderPlayersList(state: SerializedArena): void {
-        playersList.replaceChildren(
-          ...state.snakes
-            .slice()
-            .sort((a, b) => b.score - a.score)
-            .map((snake, index) => {
-              const li = document.createElement("li");
-              const swatch = document.createElement("span");
-              swatch.className = "swatch";
-              const [color] = snake.isMine ? (["#39ff8f"] as const) : colorFor(index);
-              swatch.style.background = color;
-              const label = document.createElement("span");
-              label.textContent = `${snake.displayName}${snake.isMine ? " (you)" : ""}`;
-              const score = document.createElement("strong");
-              score.textContent = String(snake.score);
-              li.append(swatch, label, score);
-              return li;
+      createButton.addEventListener("click", () => {
+        createForm.hidden = !createForm.hidden;
+      });
+      cancelCreate.addEventListener("click", () => {
+        createForm.hidden = true;
+        createForm.reset();
+        createError.hidden = true;
+      });
+
+      createForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        createError.hidden = true;
+        const data = new FormData(createForm);
+        const submitButton = createForm.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+        submitButton.disabled = true;
+        try {
+          const res = await fetch("/api/rooms", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              name: data.get("name"),
+              locked: data.get("locked") === "on",
+              allowViewers: data.get("allowViewers") === "on",
             }),
-        );
-      }
-
-      function onState(state: SerializedArena): void {
-        statusEl.textContent = "Playing";
-        statusEl.dataset.status = "playing";
-        const mine = state.snakes.find((s) => s.isMine);
-        scoreEl.textContent = String(mine?.score ?? 0);
-        renderPlayersList(state);
-      }
-
-      function onEliminated(finalScore: number): void {
-        finalScoreEl.textContent = String(finalScore);
-        statusEl.textContent = "Eliminated";
-        statusEl.dataset.status = "eliminated";
-        eliminatedPanel.hidden = false;
-      }
-
-      const client = createArenaClient({
-        canvas,
-        cellPx: canvas.width / GRID_SIZE,
-        onState,
-        onEliminated,
-      });
-      const detachDpad = attachDpad(dpad, client.sendDirection);
-
-      respawnButton.addEventListener("click", async () => {
-        respawnButton.disabled = true;
-        eliminatedPanel.hidden = true;
-        await respawn();
-        respawnButton.disabled = false;
+          });
+          const body = await res.json();
+          if (!res.ok) {
+            createError.textContent = body.reason === "name taken" ? "That room name is already taken." : body.reason;
+            createError.hidden = false;
+            return;
+          }
+          window.location.href = `/room/${body.roomId}/`;
+        } catch {
+          createError.textContent = "Couldn't reach the server.";
+          createError.hidden = false;
+        } finally {
+          submitButton.disabled = false;
+        }
       });
 
-      window.addEventListener("beforeunload", () => {
-        client.stop();
-        detachDpad();
+      initLobby({
+        listEl: document.getElementById("rooms-list")!,
+        emptyEl: document.getElementById("rooms-empty")!,
+        searchInput: document.getElementById("room-search") as HTMLInputElement,
+        prevButton: document.getElementById("rooms-prev") as HTMLButtonElement,
+        nextButton: document.getElementById("rooms-next") as HTMLButtonElement,
+        pageLabel: document.getElementById("rooms-page-label")!,
+        dialog: document.getElementById("role-dialog") as HTMLDialogElement,
+        dialogRoomName: document.getElementById("role-dialog-room-name")!,
+        dialogCounts: document.getElementById("role-dialog-counts")!,
+        dialogError: document.getElementById("role-dialog-error")!,
+        joinPlayerButton: document.getElementById("join-as-player") as HTMLButtonElement,
+        joinViewerButton: document.getElementById("join-as-viewer") as HTMLButtonElement,
+        dialogCancelButton: document.getElementById("role-dialog-cancel") as HTMLButtonElement,
+        initialRooms: JSON.parse(document.getElementById("initial-rooms-data")!.textContent!) as RoomSummary[],
       });
     </script>
   </body>

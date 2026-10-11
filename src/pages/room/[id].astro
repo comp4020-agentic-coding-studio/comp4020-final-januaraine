@@ -1,0 +1,351 @@
+---
+// A single room's game view: canvas, D-pad (Players only), separate
+// Players/Viewers membership lists, role-switch and leave actions, and the
+// post-death panel. Membership itself lives only in src/lib/room-server.ts's
+// in-memory registry (same place the game state does) — this page reads it
+// directly at request time, same process, no extra round trip.
+import { getOrCreatePlayer } from "../../lib/session";
+import { getMemberRole, getRoomSummary, type RoomSummary } from "../../lib/room-server";
+import "../../styles.css";
+
+const roomId = Number(Astro.params.id);
+const player = getOrCreatePlayer(Astro.cookies);
+const room: RoomSummary | null = Number.isInteger(roomId) ? getRoomSummary(roomId, player.id) : null;
+const yourRole = room ? getMemberRole(roomId, player.id) : null;
+---
+
+<!doctype html>
+<html lang="en-AU">
+  <head>
+    <script is:inline>
+      try {
+        if (localStorage.getItem("theme") === "light") document.documentElement.dataset.theme = "light";
+      } catch {}
+    </script>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{room ? `${room.name} — Snake Arena` : "Room — Snake Arena"}</title>
+  </head>
+  <body>
+    <nav aria-label="site">
+      <a href="/">Snake Arena</a>
+      <a href="/arena/">Arena</a>
+      <a href="/leaderboard/">Leaderboard</a>
+      <a href="/readme/">About</a>
+      <button type="button" class="theme-toggle" data-action="toggle-theme">Light mode</button>
+    </nav>
+    <main>
+      {
+        !room && (
+          <div class="panel" role="alert">
+            <h1>Room not found</h1>
+            <p>This room doesn't exist, or it has already closed.</p>
+            <a class="button primary" href="/arena/">
+              Back to the Arena Lobby
+            </a>
+          </div>
+        )
+      }
+
+      {
+        room && !yourRole && (
+          <div class="panel role-select-panel">
+            <h1>{room.name}</h1>
+            <p>
+              {room.playerCount}/{room.maxPlayers} Players · {room.viewerCount} Viewers
+            </p>
+            <p id="entry-error" class="form-error" role="alert" hidden />
+            <div class="role-dialog-actions">
+              <button
+                type="button"
+                id="entry-join-player"
+                class="button primary"
+                disabled={room.locked && !room.youAreCreator}
+                data-full={room.playerCount >= room.maxPlayers ? "1" : ""}
+                data-locked={room.locked && !room.youAreCreator ? "1" : ""}
+              >
+                Join as Player
+              </button>
+              <button type="button" id="entry-join-viewer" class="button" disabled={!room.allowViewers}>
+                Join as Viewer
+              </button>
+              <a class="button" href="/arena/">
+                Back to Lobby
+              </a>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        room && yourRole && (
+          <div class="arena-layout" id="room-view" data-room-id={room.id}>
+            <div class="arena-board">
+              <canvas id="board" width="480" height="480" aria-label={`${room.name} game board`} />
+              <div class="dpad" role="group" aria-label="Movement controls" hidden={yourRole !== "player"}>
+                <div class="dpad-row">
+                  <button type="button" class="dpad-button" data-direction="up" aria-label="Move up">
+                    &uarr;
+                  </button>
+                </div>
+                <div class="dpad-row">
+                  <button type="button" class="dpad-button" data-direction="left" aria-label="Move left">
+                    &larr;
+                  </button>
+                  <button type="button" class="dpad-button" data-direction="down" aria-label="Move down">
+                    &darr;
+                  </button>
+                  <button type="button" class="dpad-button" data-direction="right" aria-label="Move right">
+                    &rarr;
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="hud">
+              <div class="hud-row">
+                <span>Room</span>
+                <strong>{room.name}</strong>
+              </div>
+              <div class="hud-row">
+                <span>Your role</span>
+                <strong id="your-role">{yourRole === "player" ? "Player" : "Viewer"}</strong>
+              </div>
+              <div class="hud-row">
+                <span>Score</span>
+                <strong id="score">0</strong>
+              </div>
+              <p id="status-banner" data-status="connecting">
+                Connecting…
+              </p>
+
+              <div class="role-actions">
+                <button type="button" id="become-player-button" class="button primary" hidden>
+                  Become Player
+                </button>
+                <button type="button" id="become-viewer-button" class="button" hidden>
+                  Become Viewer
+                </button>
+                <button type="button" id="leave-room-button" class="button danger">
+                  Leave Room
+                </button>
+              </div>
+              <p id="role-action-error" class="form-error" role="alert" hidden />
+
+              <div id="eliminated-panel" class="panel" hidden>
+                <h2>Eliminated</h2>
+                <p>Final score: <strong id="final-score">0</strong></p>
+                <p>That run is already on the <a href="/leaderboard/">leaderboard</a>.</p>
+                <div class="role-dialog-actions">
+                  <button id="respawn-button" class="button primary" type="button">
+                    Respawn
+                  </button>
+                  <button id="death-become-viewer-button" class="button" type="button">
+                    Become Viewer
+                  </button>
+                  <button id="death-leave-button" class="button danger" type="button">
+                    Leave Room
+                  </button>
+                </div>
+              </div>
+
+              <div class="panel players-panel">
+                <h2 id="players-heading">Players (0/5)</h2>
+                <ul id="players-list" />
+              </div>
+              <div class="panel players-panel">
+                <h2 id="viewers-heading">Viewers (0)</h2>
+                <ul id="viewers-list" />
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      <div id="room-closed-panel" class="panel" role="alert" hidden>
+        <h2>Room closed</h2>
+        <p id="room-closed-reason"></p>
+        <a class="button primary" href="/arena/">
+          Back to the Arena Lobby
+        </a>
+      </div>
+    </main>
+    <script>
+      import { initThemeToggle } from "../../frontend/theme";
+      initThemeToggle();
+    </script>
+    {
+      room && !yourRole && (
+        <script define:vars={{ roomId }}>
+          const joinPlayerButton = document.getElementById("entry-join-player");
+          const joinViewerButton = document.getElementById("entry-join-viewer");
+          const errorEl = document.getElementById("entry-error");
+
+          async function join(role) {
+            errorEl.hidden = true;
+            joinPlayerButton.disabled = true;
+            joinViewerButton.disabled = true;
+            try {
+              const res = await fetch(`/api/rooms/${roomId}/join`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ role }),
+              });
+              if (res.ok) {
+                window.location.reload();
+                return;
+              }
+              const data = await res.json().catch(() => ({}));
+              errorEl.textContent = data.reason ?? "Could not join the room.";
+              errorEl.hidden = false;
+            } catch {
+              errorEl.textContent = "Couldn't reach the server.";
+              errorEl.hidden = false;
+            } finally {
+              joinPlayerButton.disabled = joinPlayerButton.dataset.locked === "1" || joinPlayerButton.dataset.full === "1";
+              joinViewerButton.disabled = false;
+            }
+          }
+
+          joinPlayerButton.addEventListener("click", () => join("player"));
+          joinViewerButton.addEventListener("click", () => join("viewer"));
+        </script>
+      )
+    }
+    {
+      room && yourRole && (
+        <script>
+          import { attachDpad } from "../../frontend/dpad";
+          import {
+            becomePlayer,
+            becomeViewer,
+            createRoomClient,
+            leaveRoom,
+            respawn,
+          } from "../../frontend/room-client";
+          import type { RoomFrame } from "../../lib/room-server";
+          import { GRID_SIZE } from "../../game/config";
+
+          const roomView = document.getElementById("room-view") as HTMLElement;
+          const roomId = Number(roomView.dataset.roomId);
+          const canvas = document.getElementById("board") as HTMLCanvasElement;
+          const dpad = document.querySelector<HTMLElement>(".dpad")!;
+          const scoreEl = document.getElementById("score")!;
+          const statusEl = document.getElementById("status-banner")!;
+          const yourRoleEl = document.getElementById("your-role")!;
+          const playersHeading = document.getElementById("players-heading")!;
+          const viewersHeading = document.getElementById("viewers-heading")!;
+          const playersList = document.getElementById("players-list")!;
+          const viewersList = document.getElementById("viewers-list")!;
+          const becomePlayerButton = document.getElementById("become-player-button") as HTMLButtonElement;
+          const becomeViewerButton = document.getElementById("become-viewer-button") as HTMLButtonElement;
+          const leaveButton = document.getElementById("leave-room-button") as HTMLButtonElement;
+          const roleActionError = document.getElementById("role-action-error")!;
+          const eliminatedPanel = document.getElementById("eliminated-panel")!;
+          const finalScoreEl = document.getElementById("final-score")!;
+          const respawnButton = document.getElementById("respawn-button") as HTMLButtonElement;
+          const deathBecomeViewerButton = document.getElementById("death-become-viewer-button") as HTMLButtonElement;
+          const deathLeaveButton = document.getElementById("death-leave-button") as HTMLButtonElement;
+          const closedPanel = document.getElementById("room-closed-panel")!;
+          const closedReason = document.getElementById("room-closed-reason")!;
+
+          function showActionError(reason: string | undefined): void {
+            roleActionError.textContent = reason ?? "That action couldn't be completed.";
+            roleActionError.hidden = false;
+          }
+
+          function renderMembers(frame: RoomFrame): void {
+            const players = frame.members.filter((m) => m.role === "player");
+            const viewers = frame.members.filter((m) => m.role === "viewer");
+            playersHeading.textContent = `Players (${players.length}/5)`;
+            viewersHeading.textContent = `Viewers (${viewers.length})`;
+
+            const renderList = (list: HTMLElement, members: typeof players) => {
+              list.replaceChildren(
+                ...members.map((m) => {
+                  const li = document.createElement("li");
+                  const label = document.createElement("span");
+                  label.textContent = `${m.displayName}${m.isMine ? " (you)" : ""}${m.connected ? "" : " (reconnecting…)"}`;
+                  li.append(label);
+                  return li;
+                }),
+              );
+            };
+            renderList(playersList, players);
+            renderList(viewersList, viewers);
+
+            becomePlayerButton.hidden = frame.yourRole !== "viewer";
+            becomePlayerButton.disabled =
+              (frame.room.locked && !frame.members.some((m) => m.isMine)) || players.length >= 5;
+            becomeViewerButton.hidden = frame.yourRole !== "player";
+            yourRoleEl.textContent = frame.yourRole === "player" ? "Player" : "Viewer";
+          }
+
+          function onFrame(frame: RoomFrame): void {
+            roleActionError.hidden = true;
+            statusEl.textContent = "Playing";
+            statusEl.dataset.status = "playing";
+            const mine = frame.arena.snakes.find((s) => s.isMine);
+            scoreEl.textContent = String(mine?.score ?? 0);
+            renderMembers(frame);
+          }
+
+          function onEliminated(finalScore: number): void {
+            finalScoreEl.textContent = String(finalScore);
+            statusEl.textContent = "Eliminated";
+            statusEl.dataset.status = "eliminated";
+            eliminatedPanel.hidden = false;
+          }
+
+          function onClosed(reason: string): void {
+            roomView.hidden = true;
+            closedPanel.hidden = false;
+            closedReason.textContent = reason;
+          }
+
+          const client = createRoomClient({
+            roomId,
+            canvas,
+            cellPx: canvas.width / GRID_SIZE,
+            onFrame,
+            onEliminated,
+            onClosed,
+          });
+          const detachDpad = attachDpad(dpad, client.sendDirection);
+
+          becomePlayerButton.addEventListener("click", async () => {
+            becomePlayerButton.disabled = true;
+            const result = await becomePlayer(roomId);
+            if (!result.ok) showActionError(result.reason);
+            becomePlayerButton.disabled = false;
+          });
+          becomeViewerButton.addEventListener("click", async () => {
+            await becomeViewer(roomId);
+          });
+          leaveButton.addEventListener("click", async () => {
+            await leaveRoom(roomId);
+            window.location.href = "/arena/";
+          });
+          respawnButton.addEventListener("click", async () => {
+            respawnButton.disabled = true;
+            eliminatedPanel.hidden = true;
+            await respawn(roomId);
+            respawnButton.disabled = false;
+          });
+          deathBecomeViewerButton.addEventListener("click", async () => {
+            eliminatedPanel.hidden = true;
+            await becomeViewer(roomId);
+          });
+          deathLeaveButton.addEventListener("click", async () => {
+            await leaveRoom(roomId);
+            window.location.href = "/arena/";
+          });
+
+          window.addEventListener("beforeunload", () => {
+            client.stop();
+            detachDpad();
+          });
+        </script>
+      )
+    }
+  </body>
+</html>
