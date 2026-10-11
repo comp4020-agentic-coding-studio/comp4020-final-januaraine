@@ -46,8 +46,12 @@ function buildRefs(initialRooms: RoomSummary[] = []): LobbyRefs {
   // "not implemented") — harmless no-op stubs here, since this file is
   // testing the lobby's own logic, not browser dialog behavior itself.
   const dialog = document.getElementById("role-dialog") as HTMLDialogElement;
-  dialog.showModal = () => {};
-  dialog.close = () => {};
+  dialog.showModal = () => {
+    dialog.open = true;
+  };
+  dialog.close = () => {
+    dialog.open = false;
+  };
   return {
     listEl: document.getElementById("rooms-list")!,
     emptyEl: document.getElementById("rooms-empty")!,
@@ -198,5 +202,33 @@ describe("role-selector modal: reuses server-authoritative room rules", () => {
     expect(refs.dialogCounts.textContent).toBe("2 / 5 Players");
     expect(refs.joinPlayerButton.disabled).toBe(false);
     expect(refs.joinViewerButton.hidden).toBe(false);
+  });
+});
+
+// Reproduces the stale-modal bug: the room page's back button can return
+// here via history.back(), which the browser may serve from the
+// back/forward cache — this exact script instance and DOM frozen mid-join,
+// dialog open, both buttons disabled (confirmJoin disables them right
+// before the navigation that never lets it re-enable them).
+describe("bfcache restore (pageshow with persisted)", () => {
+  it("closes a dialog left open from before navigating away, and refreshes the room stream", () => {
+    const refs = buildRefs([baseRoom()]);
+    const stop = initLobby(refs);
+    refs.listEl.querySelector<HTMLButtonElement>("button.primary")!.click();
+    refs.joinPlayerButton.disabled = true;
+    refs.joinViewerButton.disabled = true;
+    expect(refs.dialog.open).toBe(true);
+    const streamCountBeforeRestore = FakeEventSource.instances.length;
+
+    window.dispatchEvent(new Event("pageshow"));
+    expect(refs.dialog.open).toBe(true); // a normal pageshow (persisted: false) must not touch it
+
+    const persistedEvent = new Event("pageshow");
+    Object.defineProperty(persistedEvent, "persisted", { value: true });
+    window.dispatchEvent(persistedEvent);
+
+    expect(refs.dialog.open).toBe(false);
+    expect(FakeEventSource.instances.length).toBe(streamCountBeforeRestore + 1);
+    stop();
   });
 });

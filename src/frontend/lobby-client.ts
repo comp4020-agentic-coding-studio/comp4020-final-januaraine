@@ -235,10 +235,31 @@ export function initLobby(refs: LobbyRefs): () => void {
     openStream();
   });
 
+  // The room page's back button navigates here with `history.back()` (see
+  // room/[id].astro) when it can, which the browser may satisfy from the
+  // back/forward cache: this exact script instance and DOM are restored
+  // frozen, not re-run, so a dialog left open mid-join (confirmJoin disables
+  // both buttons right before `window.location.href` takes over, and never
+  // gets a chance to re-enable them) reappears stuck open with dead
+  // buttons. `pageshow`'s `persisted` flag is the standard signal for a
+  // bfcache restore — close the stale dialog and refresh the room stream so
+  // the lobby is immediately interactive again, exactly as a fresh load
+  // would leave it.
+  function onPageShow(event: PageTransitionEvent): void {
+    if (!event.persisted) return;
+    refs.dialog.close();
+    refs.dialogError.hidden = true;
+    openStream();
+  }
+  window.addEventListener("pageshow", onPageShow);
+
   openStream();
   render({ rooms: latestRooms, previews: {} });
 
-  return () => source?.close();
+  return () => {
+    source?.close();
+    window.removeEventListener("pageshow", onPageShow);
+  };
 }
 
 // Exported for completeness/testing symmetry with arena-render's own export.
