@@ -103,17 +103,21 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
             <div class="room-main">
               <canvas id="board" width="480" height="480" aria-label={`${room.name} game board`} />
               <div class="dpad" role="group" aria-label="Movement controls" hidden={yourRole !== "player"}>
-                <div class="dpad-grid">
-                  <button type="button" class="dpad-button dpad-up" data-direction="up" aria-label="Move up">
+                <div class="dpad-row">
+                  <button type="button" class="dpad-button" data-direction="up" aria-label="Move up">
                     &uarr;
                   </button>
-                  <button type="button" class="dpad-button dpad-left" data-direction="left" aria-label="Move left">
+                </div>
+                <div class="dpad-row">
+                  <button type="button" class="dpad-button" data-direction="left" aria-label="Move left">
                     &larr;
                   </button>
-                  <button type="button" class="dpad-button dpad-right" data-direction="right" aria-label="Move right">
+                  <button type="button" class="dpad-button" data-direction="right" aria-label="Move right">
                     &rarr;
                   </button>
-                  <button type="button" class="dpad-button dpad-down" data-direction="down" aria-label="Move down">
+                </div>
+                <div class="dpad-row">
+                  <button type="button" class="dpad-button" data-direction="down" aria-label="Move down">
                     &darr;
                   </button>
                 </div>
