@@ -772,6 +772,16 @@ tr.mine {
   margin-bottom: 1.25rem;
 }
 
+/* Giving this element its own `display` (above) is enough to defeat the
+   browser's built-in `[hidden] { display: none }` rule — same gotcha as
+   .form-error[hidden]/.role-choice[hidden] elsewhere in this file: restate
+   it explicitly so the form actually starts hidden and the Create Room
+   button's `createForm.hidden = !createForm.hidden` toggle (arena.astro)
+   has something to toggle. */
+.create-room-form[hidden] {
+  display: none;
+}
+
 .create-room-form .filter-field input {
   width: 100%;
 }
