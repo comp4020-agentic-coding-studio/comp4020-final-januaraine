@@ -1,11 +1,11 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
-import { type SQL, eq, sql } from "drizzle-orm";
+import { type SQL, desc, eq, like, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { ticksToMs } from "../game/validate";
-import { type Game, type Player, games, players } from "./schema";
+import { type Game, type Player, type Room, games, players, rooms } from "./schema";
 
 // One SQLite file is the app's whole persistent state. In production
 // fly.toml points DATABASE_PATH at the machine's volume (/data), which is
@@ -25,7 +25,18 @@ export const db = drizzle(client);
 // the migration it writes to drizzle/.
 migrate(db, { migrationsFolder: "./drizzle" });
 
-export type { Game, Player };
+// Room *metadata* survives in SQLite (so names stay unique and listable),
+// but a room's live state — its arena, membership, connections — lives only
+// in src/lib/room-server.ts's in-memory registry, same as the arena it
+// replaces, and a restart loses all of it. A `rooms` row with no matching
+// runtime would be a room nobody can ever actually join again, so rather
+// than let that accumulate, every boot starts with an empty table: this is
+// a deliberate consequence of the single-instance, memory-only-live-state
+// assumption (see docs/decisions/ADR-002-room-based-multiplayer.md), not a
+// data-loss bug. `games`/`players` are untouched — those are real history.
+db.delete(rooms).run();
+
+export type { Game, Player, Room };
 
 export function findPlayerByToken(sessionToken: string): Player | null {
   return db.select().from(players).where(eq(players.sessionToken, sessionToken)).get() ?? null;
@@ -74,6 +85,84 @@ export function deletePlayerPermanently(playerId: number): void {
     tx.delete(games).where(eq(games.playerId, playerId)).run();
     tx.delete(players).where(eq(players.id, playerId)).run();
   });
+}
+
+// Canonical form of a room name used only for the uniqueness check — trimmed
+// and lowercased, so "Snake Pit", " snake pit ", and "SNAKE PIT" all collide.
+// The display name (`name`) keeps whatever casing the creator typed.
+export function roomNameKey(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+export interface CreateRoomInput {
+  name: string;
+  creatorPlayerId: number;
+  locked: boolean;
+  allowViewers: boolean;
+}
+
+export interface RoomNameTaken {
+  ok: false;
+  reason: "name taken";
+}
+
+// The uniqueness check that actually matters: the `rooms_name_key_unique`
+// index, not a prior SELECT (which would leave a window for two concurrent
+// creates of the same name to both pass). A second insert for the same
+// nameKey throws; this catches exactly that failure and reports it as a
+// normal "taken" result rather than a 500.
+export function createRoom(input: CreateRoomInput): { ok: true; room: Room } | RoomNameTaken {
+  try {
+    const room = db
+      .insert(rooms)
+      .values({
+        name: input.name,
+        nameKey: roomNameKey(input.name),
+        creatorPlayerId: input.creatorPlayerId,
+        locked: input.locked,
+        allowViewers: input.allowViewers,
+      })
+      .returning()
+      .get();
+    return { ok: true, room };
+  } catch (error) {
+    if (error instanceof Error && /UNIQUE constraint failed.*rooms/i.test(error.message)) {
+      return { ok: false, reason: "name taken" };
+    }
+    throw error;
+  }
+}
+
+export function findRoomById(id: number): Room | null {
+  return db.select().from(rooms).where(eq(rooms.id, id)).get() ?? null;
+}
+
+export function deleteRoom(id: number): void {
+  db.delete(rooms).where(eq(rooms.id, id)).run();
+}
+
+export interface RoomListFilters {
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+// Listing is cheap (just these columns, no join, no live state) — the
+// "appropriate listing strategy" for a potentially large room count is this
+// plain paginated query; it's lobby *previews* that are expensive and stay
+// bounded separately (see room-server.ts). SQLite's LIKE is already
+// case-insensitive for ASCII by default, which is what "handle case
+// consistently" means here — no COLLATE needed.
+export function listRooms(filters: RoomListFilters = {}): Room[] {
+  const limit = filters.limit ?? 20;
+  const offset = filters.offset ?? 0;
+  const query = db.select().from(rooms);
+  const rows = filters.search ? query.where(like(rooms.name, `%${filters.search}%`)) : query;
+  return rows
+    .orderBy(desc(rooms.createdAt), desc(rooms.id))
+    .limit(limit)
+    .offset(offset)
+    .all();
 }
 
 export interface LeaderboardEntry {

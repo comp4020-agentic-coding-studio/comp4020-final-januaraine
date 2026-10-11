@@ -42,5 +42,34 @@ export const games = sqliteTable("games", {
   status: text().notNull().default("completed"),
 });
 
+// Room metadata only — never the live game (snakes, food, membership), which
+// stays in-memory in src/lib/room-server.ts exactly like the single arena it
+// replaces (see docs/decisions/ADR-002-room-based-multiplayer.md). This table
+// exists so room names can be enforced unique and listed/searched like any
+// other persisted record; db.ts truncates it once at boot, since a restart
+// loses every in-memory runtime anyway and a DB row with no matching runtime
+// would be an orphan, not a resumable room.
+export const rooms = sqliteTable("rooms", {
+  id: int().primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  // lower(trim(name)) — a separate column, computed and set by the caller,
+  // is how case-insensitive uniqueness is enforced without hand-written
+  // collation DDL. `name` itself keeps the creator's original casing.
+  nameKey: text("name_key").notNull().unique(),
+  creatorPlayerId: int("creator_player_id")
+    .notNull()
+    .references(() => players.id),
+  // "Lock player joining" — solo-play, not a password. See ArenaState in
+  // room-server.ts for where this is actually enforced server-side.
+  locked: int("locked", { mode: "boolean" }).notNull().default(false),
+  // "Allow public viewers" — independent of `locked`: a locked room can
+  // still admit Viewers.
+  allowViewers: int("allow_viewers", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`(datetime('now'))`),
+});
+
 export type Player = typeof players.$inferSelect;
 export type Game = typeof games.$inferSelect;
+export type Room = typeof rooms.$inferSelect;
