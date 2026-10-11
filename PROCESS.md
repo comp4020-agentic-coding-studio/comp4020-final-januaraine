@@ -134,3 +134,132 @@ including the new arena ones, correctly. CI building and running the real
 Dockerfile, and the live deployed app checked with two genuinely separate
 browser sessions, are what closes both gaps; see the final report for what
 those actually showed.
+
+## C9 continued — room-based multiplayer (this session)
+
+The brief for this milestone changed from C9's original "one continuous
+shared arena" to room-based multiplayer: a lobby, named/searchable rooms,
+a 5-Player cap per room with unlimited Viewers, independent lock/viewer
+flags, and a live preview. This supersedes ADR-001's "no rooms" decision —
+[ADR-002](docs/decisions/ADR-002-room-based-multiplayer.md) records why,
+and what didn't change (the SSE+POST transport, server authority, the
+disconnect-grace pattern, all reused unmodified).
+
+### What I inspected before changing anything
+
+The working tree first: `git status`/`git diff` turned up unrelated
+uncommitted work already present (a light/dark theme toggle across every
+page, and a `listLeaderboard` bugfix moving `LIMIT` before the sort) —
+neither touched or reverted, both left exactly as found. Then the actual
+C9 implementation: `src/game/arena.ts` and its tests (the pure multiplayer
+rules — confirmed these generalize to "one `ArenaState` per room" with no
+changes needed at all), `src/lib/arena-server.ts` (the single-arena
+runtime being replaced), the `/api/arena/*` routes, `arena.astro`,
+`arena-client.ts`/`arena-render.ts`, `spec/arena.test.ts`, the Drizzle
+schema/migrations, `session.ts`'s identity model, `fly.toml`/`Dockerfile`
+(confirmed the single-instance, `--ha=false` assumption rooms would also
+need to rely on), and the original design doc's own rooms sketch (§11) for
+terminology, without treating it as binding — ADR-001 had already departed
+from it once, deliberately.
+
+### What actually got built
+
+- **Schema**: a `rooms` table (`src/lib/schema.ts`,
+  `drizzle/0003_fancy_random.sql`) — name, a separate case-insensitive
+  `nameKey` carrying the actual uniqueness constraint, creator, `locked`,
+  `allowViewers`. `db.ts` truncates this table once at boot (see ADR-002's
+  "costs" section for why that's deliberate, not a bug) and gained
+  `createRoom`/`findRoomById`/`deleteRoom`/`listRooms` alongside the
+  existing player/game/leaderboard functions.
+- **`src/lib/room-server.ts`** replaces `arena-server.ts`: a
+  `Map<roomId, RoomRuntime>` where each runtime wraps one *unchanged*
+  `game/arena.ts` `ArenaState` plus a `Map<playerId, Member>` for
+  roles/connections, a per-room tick loop (same idle-stop behavior as
+  before, now per room), and the per-player disconnect-grace timer
+  generalized to also decide room closure when the departing member is
+  the creator.
+- **Routes**: `src/pages/api/rooms/{index,stream}.ts` (lobby list/create,
+  and a throttled SSE feed with authorization-checked previews) and
+  `src/pages/api/rooms/[id]/{stream,join,input,become-player,become-viewer,respawn,leave}.ts`.
+  The old `/api/arena/*` routes are deleted.
+- **Pages**: `arena.astro` rewritten as the Arena Lobby (search, Create
+  Room, room cards, a role-selector dialog); `room/[id].astro` added for
+  the room game view (canvas, D-pad gated to Players only, separate
+  Players/Viewers lists, role-switch/leave/death actions). `play.astro`
+  is untouched; only its nav link is gone from every page, per the brief
+  ("do not delete reusable game-engine code").
+- **Frontend**: `room-client.ts` and `lobby-client.ts` added;
+  `arena-client.ts` deleted (its logic is what `room-client.ts`
+  generalizes); `arena-render.ts`/`dpad.ts`/`input.ts` reused unchanged
+  for both the room canvas and the lobby's mini previews.
+- **Tests**: `spec/arena.test.ts` replaced by `spec/rooms.test.ts` — 15
+  integration tests over real HTTP/SSE: unique names (incl.
+  case-insensitive collision), create+search, the 5-Player cap with
+  unlimited Viewers, locked-room Player-join rejection (while the creator
+  can still play), viewer-permission rejection, lobby preview
+  authorization (a locked or no-viewer room's id, even explicitly
+  requested, never comes back with preview data), Viewer→Player
+  switching (including rejection once full), elimination/respawn/become-
+  viewer/leave without ending the game for others, creator-departure
+  closing the room (both an explicit leave and a disconnect past the
+  grace window), a genuine concurrent race for the last Player slot (two
+  real simultaneous requests, exactly one wins), real-time propagation
+  between two independent sessions in under a second, a Viewer's input
+  being silently ignored rather than moving anyone's snake, and
+  reconnect-resumes-the-same-membership. `src/game/arena.ts`'s own unit
+  tests are untouched and still pass unmodified, since the game core
+  itself needed no changes.
+
+### A bug the tests themselves caught
+
+`spec/rooms.test.ts` revealed two real bugs before they'd have
+reached the app:
+
+1. An early version of `joinRoom` tore down *any* existing membership
+   (via a generic "leave your current room first" step) before adding
+   the new one — including when the "new" membership was just a role
+   switch within the *same* room. Since leaving a room as its creator
+   closes it, a creator calling "Join as Player" again after becoming a
+   Viewer would have closed their own room out from under themselves.
+   Caught by code review before the tests even ran, not by a failing
+   test — fixed by excluding the room being joined from that cleanup
+   step.
+2. A test-only bug, not an app bug: one room name in the test file ("…
+   Locked But Watchable …" plus its uniqueness suffix) exceeded the
+   server's own 40-character room-name cap, so the room was never
+   created and the real assertion never got exercised — it failed with
+   "room name must be 1-40 characters" instead of the issue it was meant
+   to catch. Shortened the label; the cap itself (a deliberate, modest
+   bound on a user-supplied name) was correct as written.
+
+Also caught in manual verification, not by an automated test failing
+loudly: a bodyless `POST` (become-player/become-viewer/respawn/leave)
+sent without a `content-type` header tripped Astro's CSRF origin check
+in this sandboxed test environment, where `fetch` sends no `Origin`
+header at all. `leaderboard.astro`'s own delete-my-data request already
+documents the fix in a comment — `content-type: application/json` marks
+a request as script-driven regardless of body — applied to both the test
+helpers and the production `room-client.ts`/`lobby-client.ts` fetches.
+
+### Verification
+
+`pnpm typecheck` (`astro check`, 0 errors across 60 files) and
+`pnpm test:unit` (57/57, including all of `src/game/arena.test.ts`
+unmodified) pass. `pnpm build` succeeds; the built server
+(`node ./dist/server/entry.mjs`, `ARENA_DISCONNECT_GRACE_MS=400` the same
+way CI shortens it) serves every route including the new room ones.
+`pnpm check` — the project's own full gate — passes end-to-end: 57 unit
+tests, 46 spec tests (the new 15-test `spec/rooms.test.ts`, plus
+`spec/leaderboard.test.ts`, `spec/games.test.ts`, and
+`spec/invariants.test.ts` rerun unmodified as a regression check, all
+still green).
+
+The same two pre-existing sandbox gaps from the earlier C9 entry still
+apply and aren't closed by this session: no browser here to visually
+exercise the lobby dialog/room canvas/D-pad by hand, and no rootless
+Docker build to prove the exact deployed image. Both of those, plus an
+actual two-independent-browser-session check of rooms specifically (the
+brief is explicit that two tabs sharing one cookie don't count), are
+listed as what the user still needs to do locally — see the final
+report's testing instructions. Nothing in this session was committed,
+pushed, or deployed; that stayed the user's explicit call throughout.
