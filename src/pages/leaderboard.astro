@@ -25,7 +25,7 @@ const hasAnyQueryParam = hasFilters || sortValue !== "desc";
 let entries: LeaderboardEntry[] = [];
 let errors: string[] = [];
 if (parsed.ok) {
-  entries = listLeaderboard({ ...parsed.filters, limit: 10, currentPlayerId: currentPlayer?.id ?? null });
+  entries = listLeaderboard({ ...parsed.filters, limit: 30, currentPlayerId: currentPlayer?.id ?? null });
 } else {
   errors = parsed.errors;
 }

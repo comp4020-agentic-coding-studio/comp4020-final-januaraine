@@ -74,7 +74,7 @@ describe("submitting a game result", () => {
     expect(submitted.game.score).toBe(score);
 
     // The leaderboard is now one row per distinct player, so a mid-range
-    // score isn't guaranteed a place in the unfiltered top 10 once enough
+    // score isn't guaranteed a place in the unfiltered top 30 once enough
     // other players have scored higher — look this player up by name
     // instead of assuming their row survives into that window.
     const leaderboard = await fetch(

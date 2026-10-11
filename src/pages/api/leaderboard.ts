@@ -21,6 +21,6 @@ export const GET: APIRoute = ({ request, cookies }) => {
   }
 
   const currentPlayerId = getExistingPlayer(cookies)?.id ?? null;
-  const entries = listLeaderboard({ ...parsed.filters, limit: 10, currentPlayerId });
+  const entries = listLeaderboard({ ...parsed.filters, limit: 30, currentPlayerId });
   return new Response(JSON.stringify({ entries }), { headers: { "content-type": "application/json" } });
 };

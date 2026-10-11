@@ -185,7 +185,7 @@ in memory and only a finished run ever reaches the database.
 |---|---|---|
 | `/api/session` | GET | Mints (or confirms) the caller's anonymous identity; returns `{ displayName }` |
 | `/api/games` | POST | Validates and persists a finished game: `{ score, ticks }` → `{ ok, game }` or `400 { ok: false, reason }` |
-| `/api/leaderboard` | GET | Top 10 games by score: `{ entries }` |
+| `/api/leaderboard` | GET | Top 30 games by score: `{ entries }` |
 | `/api/health` | GET | `{ status: "ok" }` if the database is reachable, `503` otherwise |
 | `/api/arena/stream` | GET | Opens the realtime channel (Server-Sent Events): joins the caller into the shared arena and streams one `{ gridSize, food, snakes }` frame per server tick |
 | `/api/arena/input` | POST | A validated direction change for the caller's own snake: `{ direction }` → `{ ok: true }` or `400` |
