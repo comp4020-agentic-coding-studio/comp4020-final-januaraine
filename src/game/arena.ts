@@ -65,6 +65,23 @@ export function createArena(gridSize: number = GRID_SIZE, random: RandomSource =
   return { snakes: {}, food: randomEmptyCell(gridSize, [], random), gridSize };
 }
 
+// A fresh snake starts facing whichever of the four walls it's farthest
+// from, rather than always "right" — a spawn cell is uniform-random over
+// the whole board, so always facing right could put a brand-new player a
+// single tick from an unavoidable wall death before they've even seen the
+// board, let alone reacted. Ties (most relevant on an empty board, where
+// spawn lands at a scan-order corner) keep "right" as the preferred
+// direction, matching this function's previous fixed default.
+function safeSpawnDirection(spawn: Point, gridSize: number): Direction {
+  const clearances: readonly { direction: Direction; clearance: number }[] = [
+    { direction: "right", clearance: gridSize - 1 - spawn.x },
+    { direction: "left", clearance: spawn.x },
+    { direction: "down", clearance: gridSize - 1 - spawn.y },
+    { direction: "up", clearance: spawn.y },
+  ];
+  return clearances.reduce((best, c) => (c.clearance > best.clearance ? c : best)).direction;
+}
+
 // Adding a player who already has a live snake is a no-op — this is what
 // makes a reconnect (a second /api/arena/stream open before the first one's
 // grace timer fires) safe to call through the same join path rather than
@@ -79,12 +96,13 @@ export function joinArena(
 
   const occupied = [...allSegments(state), state.food];
   const spawn = randomEmptyCell(state.gridSize, occupied, random);
+  const direction = safeSpawnDirection(spawn, state.gridSize);
   const snake: ArenaSnake = {
     playerId,
     displayName,
     segments: [spawn],
-    direction: "right",
-    pendingDirection: "right",
+    direction,
+    pendingDirection: direction,
     score: 0,
     ticks: 0,
   };

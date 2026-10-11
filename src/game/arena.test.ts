@@ -61,6 +61,29 @@ describe("joinArena", () => {
     const again = joinArena(joined, 1, "Player One (ignored)", fixedRandom);
     expect(again).toBe(joined);
   });
+
+  it("faces the new snake away from its nearest wall, not always right", () => {
+    // Food parked in the far corner (out of scan order's way), so random()
+    // = 0.59 on this empty 10x10 board lands at free-list/raw index 58,
+    // i.e. (8, 5): clearance is 1 cell right, 8 left, 4 down, 5 up — left is
+    // the only one not within a couple of ticks of an unsteered wall death.
+    const state = arena([], { x: 9, y: 9 }, 10);
+    const joined = joinArena(state, 1, "Player One", () => 0.59);
+    expect(joined.snakes[1].segments[0]).toEqual({ x: 8, y: 5 });
+    expect(joined.snakes[1].direction).toBe("left");
+    expect(joined.snakes[1].pendingDirection).toBe("left");
+  });
+
+  it("still defaults to right when no wall is any nearer than another", () => {
+    // Food parked in the far corner; fixedRandom then lands spawn at
+    // (0, 0) — equally 9 cells from the right wall and the bottom wall,
+    // the only tie this spawn algorithm can produce on a square board.
+    // Right stays the preferred tie-break.
+    const state = arena([], { x: 9, y: 9 }, 10);
+    const joined = joinArena(state, 1, "Player One", fixedRandom);
+    expect(joined.snakes[1].segments[0]).toEqual({ x: 0, y: 0 });
+    expect(joined.snakes[1].direction).toBe("right");
+  });
 });
 
 describe("leaveArena", () => {
@@ -82,9 +105,10 @@ describe("leaveArena", () => {
 
 describe("setArenaDirection", () => {
   it("queues a direction for one player without touching another's", () => {
-    let state = createArena(10, fixedRandom);
-    state = joinArena(state, 1, "Player One", fixedRandom);
-    state = joinArena(state, 2, "Player Two", fixedRandom);
+    const state = arena([
+      snake({ playerId: 1, segments: [{ x: 1, y: 1 }] }),
+      snake({ playerId: 2, segments: [{ x: 5, y: 5 }] }),
+    ]);
 
     const next = setArenaDirection(state, 1, "up");
     expect(next.snakes[1].pendingDirection).toBe("up");

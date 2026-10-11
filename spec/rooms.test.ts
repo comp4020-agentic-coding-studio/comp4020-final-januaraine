@@ -404,7 +404,8 @@ describe("player death, respawn, and leaving", () => {
 
       const stream = await openRoomStream(creatorCookie, roomId);
       // Nobody ever steers the creator's snake — every snake starts facing
-      // "right", so it drifts into the wall within gridSize ticks at most.
+      // away from its nearest wall, so it's guaranteed to drift into some
+      // wall within gridSize ticks at most either way.
       await stream.read((f) => f.arena.snakes.every((s) => s.displayName !== creatorName), 4000);
 
       // The room itself is unaffected: the other Player is still a member
@@ -677,8 +678,36 @@ describe("real-time propagation to multiple independent sessions", () => {
     await joinAs(otherCookie, roomId, "player");
 
     const creatorStream = await openRoomStream(creatorCookie, roomId);
-    const initial = await creatorStream.read((f) => f.arena.snakes.some((s) => s.isMine));
-    const startY = initial.arena.snakes.find((s) => s.isMine)!.segments[0].y;
+    const first = await creatorStream.read((f) => f.arena.snakes.some((s) => s.isMine));
+    const firstHead = first.arena.snakes.find((s) => s.isMine)!.segments[0];
+    // A fresh snake can start facing any of the four directions (it spawns
+    // facing away from its nearest wall, not always "right" — see
+    // src/game/arena.ts), so this test can't just pick a fixed target
+    // direction like "down": if the creator already happens to be heading
+    // "up", "down" is a same-tick reversal and gets silently rejected (a
+    // snake can't reverse into its own neck), and this test would wait
+    // forever for a move that was never going to happen. Watching one more
+    // tick reveals the actual current heading without needing to know how
+    // it was chosen.
+    const second = await creatorStream.read((f) => {
+      const head = f.arena.snakes.find((s) => s.isMine)?.segments[0];
+      return head !== undefined && (head.x !== firstHead.x || head.y !== firstHead.y);
+    }, 2000);
+    const secondHead = second.arena.snakes.find((s) => s.isMine)!.segments[0];
+    const gridSize = second.arena.gridSize;
+    const movingHorizontally = secondHead.y === firstHead.y;
+    // Turn 90 degrees — always a valid change, unlike attempting a reversal
+    // — towards whichever side has more room, so this test's own turn can't
+    // legitimately run the creator into a wall before propagation is
+    // observed (that would look identical to propagation itself being slow).
+    const targetDirection = movingHorizontally
+      ? secondHead.y <= gridSize - 1 - secondHead.y
+        ? "down"
+        : "up"
+      : secondHead.x <= gridSize - 1 - secondHead.x
+        ? "right"
+        : "left";
+    const axisBefore = movingHorizontally ? secondHead.y : secondHead.x;
 
     const otherStream = await openRoomStream(otherCookie, roomId);
     await otherStream.read((f) => f.arena.snakes.some((s) => s.displayName === creatorName));
@@ -687,17 +716,25 @@ describe("real-time propagation to multiple independent sessions", () => {
     const input = await fetch(new URL(`/api/rooms/${roomId}/input`, baseUrl), {
       method: "POST",
       headers: { "content-type": "application/json", cookie: creatorCookie },
-      body: JSON.stringify({ direction: "down" }),
+      body: JSON.stringify({ direction: targetDirection }),
     });
     expect(input.status).toBe(200);
 
+    // The internal read timeout here is deliberately looser than the actual
+    // "well under a second" assertion below it: the two must not share one
+    // number, or a propagation that's merely a little slow (but still a
+    // pass) can make this throw on "no matching frame" before the assertion
+    // ever gets to see it.
     const updated = await otherStream.read((f) => {
       const creator = f.arena.snakes.find((s) => s.displayName === creatorName);
-      return creator !== undefined && creator.segments[0].y > startY;
-    }, 1000);
+      const axis = movingHorizontally ? creator?.segments[0].y : creator?.segments[0].x;
+      return axis !== undefined && axis !== axisBefore;
+    }, 2000);
     const elapsedMs = Date.now() - before;
 
-    expect(updated.arena.snakes.find((s) => s.displayName === creatorName)?.segments[0].y).toBeGreaterThan(startY);
+    const creatorNow = updated.arena.snakes.find((s) => s.displayName === creatorName);
+    expect(creatorNow).toBeDefined();
+    expect(movingHorizontally ? creatorNow!.segments[0].y : creatorNow!.segments[0].x).not.toBe(axisBefore);
     expect(elapsedMs).toBeLessThan(1000);
 
     creatorStream.close();
