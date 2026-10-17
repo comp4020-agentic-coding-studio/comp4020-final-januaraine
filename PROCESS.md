@@ -25,3 +25,13 @@ I added lightweight observability to Snake Arena so that a developer can underst
 3. **How I knew it was right:** The corrected API paths and module references match the repository's current structure. The changes were confined to documentation and did not alter the working application.
 
 4. **The citation:** [2dcb721](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/commit/2dcb721)
+
+### Moment 3: Preventing automated tests from polluting production
+
+1. **What happened:** During the final preflight checks, I ran the integration test suite against the deployed Fly.io application by setting `APP_URL` to the production URL. The tests created multiple rooms with names such as `Metrics Room`, `Last Slot`, and `Grace Keeps Player`. Some rooms remained visible in the live lobby after the tests finished.
+
+2. **What I did instead of the obvious thing:** Rather than manually deleting the rooms or changing the production room lifecycle to hide the symptoms, I traced the room names and embedded timestamps back to the test helpers and correlated them with Fly.io logs. I found that some tests created and joined rooms through HTTP requests without opening an SSE connection or explicitly calling the leave endpoint. Consequently, neither of the existing room-cleanup paths was triggered. This showed that the immediate issue was not simply stale UI state, but that the test suite could mutate production data without a sufficient safety guard.
+
+3. **How I knew it was right:** The room names matched the automated test cases, their timestamps aligned with the preflight run, and the corresponding room creation and player-join events appeared in the Fly.io logs. The investigation also confirmed that runtime room state is held in memory while room metadata is stored in SQLite, with room records cleared during application startup. I chose to address the unsafe test configuration rather than introduce unnecessary production cleanup logic. A production-URL safety guard is the proposed follow-up; it should only be described as implemented after the code change and its tests are complete.
+
+4. **The citation:** [e210e7b](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/commit/e210e7b)
