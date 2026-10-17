@@ -1,0 +1,9 @@
+# Crit 10
+
+**What was the breakthrough that moved the work forward?**
+
+The breakthrough was treating observability as a set of specific questions the system needed to answer, rather than as a requirement to build a monitoring dashboard. I focused on what a developer needs to know when diagnosing a multiplayer issue: who joined a room, what happened to a player, whether a food item was collected, and whether a connection or database operation failed. This led to a small set of structured event logs and runtime metrics that fit the existing architecture. Checking the actual implementation also revealed that the documentation's generic WebSocket and match terminology did not accurately describe the SSE and room-based system. Adapting the event vocabulary to the real architecture made the instrumentation more useful and easier to verify.
+
+**What did this work change about who I want to be as a software developer?**
+
+This work reinforced that I want to be a developer who builds systems that are understandable and diagnosable, not just systems that appear to work during a successful demonstration. I want to make deliberate technical decisions based on the architecture that actually exists, verify those decisions through tests and observable behaviour, and keep documentation consistent with the code. I also learned that effective engineering does not always mean adding more infrastructure. A small, well-targeted solution can be more appropriate than a large monitoring system when it answers the questions the project genuinely needs to answer. Going forward, I want to consider how a system will be debugged and operated while I am designing it, rather than treating observability as an afterthought.
