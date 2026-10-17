@@ -59,13 +59,13 @@ and get eliminated in close to real time — with nobody reloading anything —
 and that outcome is the server's decision, never something either browser
 is trusted to assert about itself. Concretely:
 
-- opening `/arena/` in two genuinely separate browser sessions (not two
-  tabs sharing one cookie — that's one identity, not two players) puts both
-  in the same board, and a direction change in one is visible in the other
-  within about a second
+- two genuinely separate browser sessions (not two tabs sharing one cookie
+  — that's one identity, not two players) joining the same room from the
+  `/arena/` lobby share that room's board, and a direction change posted by
+  one is visible in the other's stream within about a second
 - the server computes every snake's movement, every collision, and every
   score; a client only ever sends "I want to turn this way"
-  (`POST /api/arena/input`), never a position or a score
+  (`POST /api/rooms/[id]/input`), never a position or a score
 - a dropped connection and a deliberate elimination are different things
   and behave differently on purpose — see
   [`docs/decisions/ADR-001-realtime-multiplayer.md`](docs/decisions/ADR-001-realtime-multiplayer.md)
@@ -125,15 +125,19 @@ every question the brief actually asks.
   current Fly.io community report of WebSocket-upgrade requests failing at
   the edge for reasons unrelated to the app was the deciding factor against
   the alternative — a real operational risk, not just a preference.
-- **One shared arena, held entirely in memory, not per-tick writes to
-  SQLite.** A player's run is only ever persisted through the exact same
+- **Rooms, each held entirely in memory, not per-tick writes to SQLite.**
+  C9 originally shipped one continuous shared arena
+  ([`docs/decisions/ADR-001-realtime-multiplayer.md`](docs/decisions/ADR-001-realtime-multiplayer.md)),
+  superseded the same week by room-based multiplayer — named/searchable
+  rooms with a 5-Player cap, independent lock/viewer settings, and a live
+  preview (see
+  [`docs/decisions/ADR-002-room-based-multiplayer.md`](docs/decisions/ADR-002-room-based-multiplayer.md)
+  for why, and ADR-003/ADR-004 for how a room's lifetime is decided). Either
+  way, a player's run is only ever persisted through the exact same
   `recordGameResult` path single-player already used, once, when they're
   eliminated — the server just computes the `{ score, ticks }` it passes
-  in, instead of trusting a client to report them. See
-  [`docs/decisions/ADR-001-realtime-multiplayer.md`](docs/decisions/ADR-001-realtime-multiplayer.md)
-  for why a shared arena, not rooms or matches, and how simultaneous input,
-  disconnects, and reconnects are each handled.
-- **A wire format with no raw database ids.** Each arena connection's frame
+  in, instead of trusting a client to report them.
+- **A wire format with no raw database ids.** Each room connection's frame
   carries `isMine`, computed server-side from the session cookie — the same
   pattern `/api/leaderboard`'s `isMine` already used for C8 — rather than
   ever sending a client an internal player id to compare against.
@@ -155,24 +159,27 @@ src/
                arena (the multiplayer rules: per-player snakes sharing one
                board and one food item, tickArena()) — no DOM, no framework
   frontend/    the only layer that touches the DOM: keyboard input, canvas
-               rendering, and the arena client (an EventSource plus its own
-               renderer)
+               rendering, and the room client (an EventSource plus its own
+               renderer, room-client.ts)
   lib/         backend: schema (Drizzle), persistence, session identity,
-               and arena-server (the in-memory shared arena, its SSE
-               broadcast, and the server-side tick loop)
-  pages/       Astro pages (landing, arena, leaderboard, readme) and
-               the pages/api/ routes (session, games, leaderboard, health,
-               arena/stream, arena/input, arena/respawn)
+               observability (structured logs + metrics, C10), and
+               room-server (the in-memory room registry, each room's SSE
+               broadcast, and its server-side tick loop)
+  pages/       Astro pages (landing, arena lobby, room, leaderboard, readme)
+               and the pages/api/ routes (session, games, leaderboard,
+               health, metrics, rooms/*)
 ```
 
 `src/frontend/loop.ts` and `src/frontend/render.ts` were single-player's own
 client-side loop and renderer — C9 left them in place rather than replacing
 them, since the realtime arena got its own seam instead
-(`src/frontend/arena-client.ts`). A later cleanup retired the single-player
-route entirely and removed both files along with it, once nothing else
-referenced them. `game/*` was unaffected either time: `game/arena.ts` and
-`frontend/arena-render.ts` are the separate multiplayer modules that sit
-alongside it.
+(originally `src/frontend/arena-client.ts`, generalized to the current
+`src/frontend/room-client.ts` when the single shared arena became rooms).
+A later cleanup retired the single-player route entirely and removed both
+files along with it, once nothing else referenced them. `game/*` was
+unaffected either time: `game/arena.ts` and `frontend/arena-render.ts` are
+the separate multiplayer modules that sit alongside it, reused unchanged by
+the room model (see ADR-002).
 
 ## Data model
 
@@ -202,9 +209,14 @@ in memory and only a finished run ever reaches the database.
 | `/api/leaderboard` | GET | Top 30 games by score: `{ entries }` |
 | `/api/health` | GET | `{ status: "ok" }` if the database is reachable, `503` otherwise |
 | `/api/metrics` | GET | C10 runtime counters: active connections/rooms/players plus accumulated games-started/finished, food collected, eliminations, SSE disconnects/errors, and database errors |
-| `/api/arena/stream` | GET | Opens the realtime channel (Server-Sent Events): joins the caller into the shared arena and streams one `{ gridSize, food, snakes }` frame per server tick |
-| `/api/arena/input` | POST | A validated direction change for the caller's own snake: `{ direction }` → `{ ok: true }` or `400` |
-| `/api/arena/respawn` | POST | Re-joins the caller as a fresh snake after elimination |
+| `/api/rooms` | GET, POST | Lists rooms (search/paginated) or creates one and auto-joins the caller as its Player: `{ name, locked, allowViewers }` → `{ ok, roomId }` |
+| `/api/rooms/stream` | GET | The lobby's live feed: room cards plus mini previews for whichever room ids the caller says are visible |
+| `/api/rooms/[id]/stream` | GET | Opens the realtime channel (Server-Sent Events) for one room: joins the caller's existing membership and streams one `{ room, arena, members, yourRole }` frame per server tick |
+| `/api/rooms/[id]/join` | POST | Joins the caller into a room as `{ role: "player" \| "viewer" }`, re-checking lock/capacity/viewer permissions against the live room |
+| `/api/rooms/[id]/input` | POST | A validated direction change for the caller's own snake: `{ direction }` → `{ ok: true }` or `400` |
+| `/api/rooms/[id]/respawn` | POST | Re-enters the caller as a fresh snake after elimination |
+| `/api/rooms/[id]/become-player` / `/become-viewer` | POST | Switches the caller's role within a room they're already a member of |
+| `/api/rooms/[id]/leave` | POST | Intentional departure — releases the caller's membership immediately, no disconnect-grace window |
 
 ## How to run locally
 
@@ -228,15 +240,15 @@ pnpm test:spec    # integration tests against a RUNNING app (spec/*.test.ts)
 `test:spec` needs something answering at `APP_URL` (default
 `http://localhost:8080`) — run the built app (`pnpm build && pnpm preview`,
 or the Docker image) before calling it directly; `pnpm check` already does
-`test:unit` first regardless of whether a server is up. `spec/arena.test.ts`
+`test:unit` first regardless of whether a server is up. `spec/rooms.test.ts`
 exercises real disconnect/reconnect timing against `ARENA_DISCONNECT_GRACE_MS`
 (production default: 5s, picked to outlast a browser `EventSource`'s own
 ~3s auto-reconnect delay); set it to something short (e.g. `400`) on
 whatever process you point `test:spec` at locally, or the disconnect tests
 take real minutes rather than seconds — CI's `checks.yml` already does this
 for the image it tests. Use **two different browser sessions** (not two
-tabs — they'd share one cookie, one identity) to see the arena's
-multiplayer behaviour manually.
+tabs — they'd share one cookie, one identity) joined into the same room to
+see the multiplayer behaviour manually.
 
 ## How to deploy
 
