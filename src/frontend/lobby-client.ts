@@ -1,4 +1,5 @@
 import { colorFor, readPalette, renderArena } from "./arena-render";
+import { confirmRoleJoin, populateRoleDialog } from "./role-dialog";
 import type { SerializedArena } from "../game/arena";
 import { GRID_SIZE } from "../game/config";
 import type { RoomSummary } from "../lib/room-server";
@@ -25,8 +26,6 @@ export interface LobbyRefs {
   readonly dialogCancelButton: HTMLButtonElement;
   readonly initialRooms: readonly RoomSummary[];
 }
-
-const PLAYER_DESCRIPTION = "Control your own snake and compete for the leaderboard.";
 
 interface LobbyFrame {
   rooms: RoomSummary[];
@@ -120,78 +119,17 @@ export function initLobby(refs: LobbyRefs): () => void {
     return card;
   }
 
-  // Purely decorative (the text counts above already say the same thing
-  // accessibly) — one dot per Player slot, filled for an occupied one.
-  function renderCapacityDots(container: HTMLElement, playerCount: number, maxPlayers: number): void {
-    const dots = Array.from({ length: maxPlayers }, (_, i) => {
-      const dot = document.createElement("span");
-      dot.className = i < playerCount ? "capacity-dot filled" : "capacity-dot";
-      return dot;
-    });
-    container.replaceChildren(...dots);
-  }
-
   function openRoleSelector(room: RoomSummary): void {
-    refs.dialogRoomName.textContent = room.name;
-    refs.dialogCounts.textContent = `${room.playerCount} / ${room.maxPlayers} Players`;
-    renderCapacityDots(refs.dialogCapacityDots, room.playerCount, room.maxPlayers);
-    refs.dialogViewerCount.textContent =
-      room.viewerCount === 1 ? "1 Viewer watching" : `${room.viewerCount} Viewers watching`;
-    refs.dialogError.textContent = "";
-    refs.dialogError.hidden = true;
-
-    // Player joining is always offered, explained when it's unavailable
-    // (reused server-authoritative reasons — see room-server.ts's joinRoom).
-    // Viewer joining has no equivalent capacity limit, so its only possible
-    // reason is a room setting, not a transient state — when that setting
-    // says no, the option is hidden entirely rather than shown disabled.
-    const playerFull = room.playerCount >= room.maxPlayers;
-    const playerLocked = room.locked && !room.youAreCreator;
-    const playerBlockedReason = playerLocked
-      ? "Players are locked."
-      : playerFull
-        ? `Room is full (${room.maxPlayers}/${room.maxPlayers}).`
-        : "";
-    refs.joinPlayerButton.disabled = playerBlockedReason !== "";
-    refs.joinPlayerButton.classList.toggle("role-choice-blocked", playerBlockedReason !== "");
-    refs.joinPlayerButton.dataset.reason = playerBlockedReason;
-    refs.joinPlayerDesc.textContent = playerBlockedReason || PLAYER_DESCRIPTION;
-
-    refs.joinViewerButton.hidden = !room.allowViewers;
-    refs.joinViewerButton.disabled = false;
-    refs.joinViewerButton.dataset.reason = "";
-
+    populateRoleDialog(refs, room);
     refs.dialog.dataset.roomId = String(room.id);
     refs.dialog.showModal();
   }
 
   async function confirmJoin(role: "player" | "viewer"): Promise<void> {
     const roomId = Number(refs.dialog.dataset.roomId);
-    refs.joinPlayerButton.disabled = true;
-    refs.joinViewerButton.disabled = true;
-    try {
-      const res = await fetch(`/api/rooms/${roomId}/join`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ role }),
-      });
-      if (res.ok) {
-        window.location.href = `/room/${roomId}/`;
-        return;
-      }
-      const data = (await res.json().catch(() => ({}))) as { reason?: string };
-      refs.dialogError.textContent = data.reason ?? "Could not join the room.";
-      refs.dialogError.hidden = false;
-      // Re-enable whichever action is still actually valid — never silently
-      // re-attempt with the other role.
-      refs.joinPlayerButton.disabled = refs.joinPlayerButton.dataset.reason !== "";
-      refs.joinViewerButton.disabled = refs.joinViewerButton.dataset.reason !== "";
-    } catch {
-      refs.dialogError.textContent = "Couldn't reach the server.";
-      refs.dialogError.hidden = false;
-      refs.joinPlayerButton.disabled = refs.joinPlayerButton.dataset.reason !== "";
-      refs.joinViewerButton.disabled = refs.joinViewerButton.dataset.reason !== "";
-    }
+    await confirmRoleJoin(refs, roomId, role, () => {
+      window.location.href = `/room/${roomId}/`;
+    });
   }
 
   refs.joinPlayerButton.addEventListener("click", () => void confirmJoin("player"));

@@ -57,31 +57,63 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
 
       {
         room && !yourRole && (
-          <div class="panel role-select-panel">
-            <h1>{room.name}</h1>
-            <p>
-              {room.playerCount}/{room.maxPlayers} Players · {room.viewerCount} Viewers
-            </p>
-            <p id="entry-error" class="form-error" role="alert" hidden />
-            <div class="role-dialog-actions">
-              <button
-                type="button"
-                id="entry-join-player"
-                class="button primary"
-                disabled={room.locked && !room.youAreCreator}
-                data-full={room.playerCount >= room.maxPlayers ? "1" : ""}
-                data-locked={room.locked && !room.youAreCreator ? "1" : ""}
-              >
-                Join as Player
-              </button>
-              <button type="button" id="entry-join-viewer" class="button" disabled={!room.allowViewers}>
-                Join as Viewer
-              </button>
+          <>
+            <div class="panel role-select-panel">
+              <h1>{room.name}</h1>
+              <p>
+                {room.playerCount}/{room.maxPlayers} Players · {room.viewerCount} Viewers
+              </p>
               <a class="button" href="/arena/">
                 Back to Lobby
               </a>
             </div>
-          </div>
+
+            <dialog id="role-dialog" class="role-dialog" aria-labelledby="role-dialog-title">
+              <button
+                type="button"
+                id="role-dialog-cancel"
+                class="dialog-dismiss"
+                aria-label="Cancel and close this dialog"
+              >
+                ✕
+              </button>
+              <h2 id="role-dialog-title" class="role-dialog-title">
+                Join room
+              </h2>
+              <p id="role-dialog-room-name" class="role-dialog-room-name" />
+
+              <div class="role-dialog-capacity">
+                <span id="role-dialog-counts" class="role-dialog-counts" />
+                <span id="role-dialog-capacity-dots" class="capacity-dots" aria-hidden="true" />
+              </div>
+              <p id="role-dialog-viewer-count" class="role-dialog-viewer-count" />
+
+              <p id="role-dialog-error" class="form-error" role="alert" hidden />
+
+              <div class="role-choices">
+                <button type="button" id="join-as-player" class="role-choice role-choice-player">
+                  <span class="role-choice-icon" aria-hidden="true">
+                    🎮
+                  </span>
+                  <span class="role-choice-text">
+                    <span class="role-choice-title">Join as Player</span>
+                    <span class="role-choice-desc" id="join-as-player-desc">
+                      Control your own snake and compete for the leaderboard.
+                    </span>
+                  </span>
+                </button>
+                <button type="button" id="join-as-viewer" class="role-choice role-choice-viewer">
+                  <span class="role-choice-icon" aria-hidden="true">
+                    👁
+                  </span>
+                  <span class="role-choice-text">
+                    <span class="role-choice-title">Join as Viewer</span>
+                    <span class="role-choice-desc">Watch the match live without playing.</span>
+                  </span>
+                </button>
+              </div>
+            </dialog>
+          </>
         )
       }
 
@@ -195,40 +227,53 @@ const yourRole = room ? getMemberRole(roomId, player.id) : null;
     </script>
     {
       room && !yourRole && (
-        <script define:vars={{ roomId }}>
-          const joinPlayerButton = document.getElementById("entry-join-player");
-          const joinViewerButton = document.getElementById("entry-join-viewer");
-          const errorEl = document.getElementById("entry-error");
+        <>
+          <script type="application/json" id="entry-room-data" set:html={JSON.stringify(room)} />
+          <script>
+            import { confirmRoleJoin, populateRoleDialog } from "../../frontend/role-dialog";
+            import type { RoomSummary } from "../../lib/room-server";
 
-          async function join(role) {
-            errorEl.hidden = true;
-            joinPlayerButton.disabled = true;
-            joinViewerButton.disabled = true;
-            try {
-              const res = await fetch(`/api/rooms/${roomId}/join`, {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ role }),
-              });
-              if (res.ok) {
-                window.location.reload();
-                return;
-              }
-              const data = await res.json().catch(() => ({}));
-              errorEl.textContent = data.reason ?? "Could not join the room.";
-              errorEl.hidden = false;
-            } catch {
-              errorEl.textContent = "Couldn't reach the server.";
-              errorEl.hidden = false;
-            } finally {
-              joinPlayerButton.disabled = joinPlayerButton.dataset.locked === "1" || joinPlayerButton.dataset.full === "1";
-              joinViewerButton.disabled = false;
+            const room = JSON.parse(document.getElementById("entry-room-data")!.textContent!) as RoomSummary;
+
+            const refs = {
+              dialogRoomName: document.getElementById("role-dialog-room-name")!,
+              dialogCounts: document.getElementById("role-dialog-counts")!,
+              dialogCapacityDots: document.getElementById("role-dialog-capacity-dots")!,
+              dialogViewerCount: document.getElementById("role-dialog-viewer-count")!,
+              dialogError: document.getElementById("role-dialog-error")!,
+              joinPlayerButton: document.getElementById("join-as-player") as HTMLButtonElement,
+              joinPlayerDesc: document.getElementById("join-as-player-desc")!,
+              joinViewerButton: document.getElementById("join-as-viewer") as HTMLButtonElement,
+            };
+            const dialog = document.getElementById("role-dialog") as HTMLDialogElement;
+            const dialogCancelButton = document.getElementById("role-dialog-cancel") as HTMLButtonElement;
+
+            populateRoleDialog(refs, room);
+
+            // Direct navigation / refresh of a shareable room URL: open the
+            // same role-selector the lobby uses, immediately, rather than
+            // waiting on a click (there's no room card here to click).
+            dialog.showModal();
+
+            refs.joinPlayerButton.addEventListener("click", () =>
+              void confirmRoleJoin(refs, room.id, "player", () => window.location.reload()),
+            );
+            refs.joinViewerButton.addEventListener("click", () =>
+              void confirmRoleJoin(refs, room.id, "viewer", () => window.location.reload()),
+            );
+
+            // Canceling (✕ button or Escape, which fires the dialog's native
+            // `cancel` event) must not leave a dead dialog with nowhere to
+            // go — this is a visitor who isn't a member of the room, so
+            // closing the selector sends them back to the lobby instead of
+            // leaving a closed dialog over an otherwise-blank room page.
+            function backToLobby(): void {
+              window.location.href = "/arena/";
             }
-          }
-
-          joinPlayerButton.addEventListener("click", () => join("player"));
-          joinViewerButton.addEventListener("click", () => join("viewer"));
-        </script>
+            dialogCancelButton.addEventListener("click", backToLobby);
+            dialog.addEventListener("cancel", backToLobby);
+          </script>
+        </>
       )
     }
     {

@@ -1137,7 +1137,6 @@ tr.mine {
   border-color: var(--border);
 }
 
-.role-dialog-actions,
 .role-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1205,7 +1204,6 @@ tr.mine {
     text-align: center;
   }
 
-  .role-dialog-actions .button,
   .role-actions .button {
     flex: 1 1 auto;
     min-width: 7rem;
