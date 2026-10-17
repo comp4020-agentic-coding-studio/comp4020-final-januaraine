@@ -86,6 +86,10 @@ const activeFilters = [
     <main>
       <h1>Leaderboard</h1>
       <p>Top {entries.length > 0 ? entries.length : "0"} players, ranked by personal best score.</p>
+      <p class="filters-note">
+        Anonymous player accounts and their scores may be cleaned up after 90 days with no game
+        activity. Play again from time to time to keep your record.
+      </p>
 
       <form method="get" class="leaderboard-filters" aria-label="Search leaderboard">
         <div class="filter-field">

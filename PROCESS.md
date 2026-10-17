@@ -1,43 +1,5 @@
 # Process overview
 
-## What I built
-
-Snake Arena is a browser-based, real-time multiplayer Snake game built around anonymous players, shared rooms, and a persistent leaderboard. The idea was to take a familiar single-player game and turn it into a shared experience where players can join the same room, control their own snakes, watch other players in real time, and compete without creating an account. C9 focused on making concurrent play work reliably while keeping the game understandable and accessible across desktop and mobile devices.
-
-## The moments that mattered
-
-### Moment 1: Moving from solo play to a shared, real-time arena
-
-1. **What happened:** The project evolved from a single-player Snake game into a room-based multiplayer game. This introduced problems that do not exist in solo play: multiple players must see a consistent arena, player inputs must be handled safely, and updates must reach other connected sessions without requiring a page reload.
-
-2. **What you did instead of the obvious thing:** Rather than treating each browser as the owner of its own game state, I used the server as the authority for shared arena state. Clients send inputs, while the server processes game progression and distributes updates. This makes the shared game state less dependent on individual clients and gives newly connected or reconnected sessions a way to recover the current state.
-
-3. **How you knew it was right:** I checked the multiplayer behavior through the existing room tests and local multi-session testing, focusing on whether different clients could observe the same room and whether state updates propagated without reloading. The important success criterion was not simply that the game worked in one browser, but that independent sessions could participate in the same live game.
-
-4. **The citation:** [8accb31...d121156](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/compare/8accb31...d121156)
-
-
-### Moment 2: Treating multiplayer edge cases as part of the game design
-
-1. **What happened:** Multiplayer introduced lifecycle and consistency questions beyond the basic Snake movement rules. A player can be eliminated while other players continue playing; viewers may remain after players leave; and disconnected clients may need to recover the current room state.
-
-2. **What you did instead of the obvious thing:** I did not treat these cases as ordinary single-player game-over behavior. The server remains responsible for authoritative game state, while each client presents the appropriate view for its own role and status. Room lifecycle rules also distinguish active players from viewers, rather than assuming that anyone still viewing a room means it should remain active.
-
-3. **How you knew it was right:** I examined the room lifecycle and elimination behavior against the intended multiplayer experience, and used tests to investigate failures rather than assuming every failed test meant the production game logic was broken. This helped separate actual implementation defects from timing-sensitive test assumptions.
-
-4. **The citation:** [1af35d2...4b4330d](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/compare/1af35d2...4b4330d)
-
-### Moment 3: Making the development process more reliable through targeted verification
-
-1. **What happened:** Testing exposed a flaky room test: a snake could spawn close to a wall and be eliminated by normal movement before a timing-dependent assertion ran. Repeated local runs showed that the failure was intermittent rather than a deterministic failure of the intended behavior.
-
-2. **What you did instead of the obvious thing:** Instead of simply increasing timeouts or immediately changing production game rules, I investigated the cause and separated test reliability from game-design decisions. The test was adjusted to account for the random spawn position, and the affected test suite was run repeatedly to check whether the fix addressed the race.
-
-3. **How you knew it was right:** Type checking was clean, and the room test was stress-tested over 20 repeated runs after the changes. This provided stronger evidence than relying on a single successful test run. The lesson was that a green test result is useful only when the test itself reliably measures the behavior it is intended to verify.
-
-4. **The citation:** [b527db1](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/commit/b527db1) 
-[1af35d2](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/commit/1af35d2)
-
 ## C10 — Observability
 
 C10 asks for exactly one thing: can the developer tell what the system is
@@ -134,4 +96,143 @@ flow"). The same pre-existing sandbox gap from C9 (no browser here) applies
 again: a two-independent-browser-session walkthrough of the same flow,
 watching both the log stream and `/api/metrics` live, is listed as what the
 user still needs to do locally.
+
+## Zombie player cleanup
+
+The leaderboard accumulates anonymous player rows from local dev/test
+sessions that never represented a real visitor — a browser hitting `/arena/`
+once and never playing is enough to mint one (`getOrCreatePlayer`,
+`src/lib/session.ts`). Over weeks of development this leaves a growing set
+of rows with no real score behind them, mixed in with real players' history
+in the same `players`/`games` tables.
+
+### Moment: choosing deletion over identity merging, and over IP
+
+1. **What happened:** The obvious instinct for "the same person keeps
+   getting a new anonymous id" is to find a stronger identity signal —
+   someone suggested IP address — and either merge rows that share it or use
+   it as the identity itself.
+
+2. **What I did instead of the obvious thing:** I didn't adopt IP-based
+   identity or merging at all. An IP is a property of a network path, not a
+   person: it both over-merges (a shared campus/NAT connection, or two
+   people on the same hostel WiFi, would collapse into one "player") and
+   under-merges (switching from WiFi to mobile data changes it, same
+   problem this was meant to solve). More importantly, nothing in this
+   schema has a signal that reliably says "these two anonymous rows are the
+   same human" — guessing at a merge risks splicing one person's real score
+   onto someone else's history, which is worse than leaving a zombie row
+   alone. So the design only *deletes* identity it's confident adds no
+   value (see the activity rule below), and never merges anything.
+
+3. **How I knew it was right:** deletion is the one operation here that can
+   only lose information, never fabricate it — a wrong delete loses a score
+   that could in principle be restored from a backup; a wrong merge
+   silently corrupts two people's history into one with no way to tell
+   afterwards which parts belonged to whom. Given the choice, the
+   reversible-mistake failure mode is the one to build around.
+
+### Moment: not trusting `createdAt` as a proxy for "last active"
+
+1. **What happened:** `players` has no `lastActiveAt` column — only
+   `createdAt`, set once at signup. The brief instinct for "90 days
+   inactive" is to filter on `createdAt < now - 90d`, but that measures how
+   long ago the *row* was created, not how long ago anyone actually played.
+
+2. **What I did instead of the obvious thing:** I read `src/lib/schema.ts`
+   and `src/lib/db.ts` first rather than assume a field existed, confirmed
+   no activity timestamp is tracked on `players`, and derived "last
+   activity" per player instead of reading it off one column: the most
+   recent `games.finishedAt` for a player with at least one game, and only
+   `createdAt` — reported separately as a lower bound, not disguised as
+   real activity — for a player with zero games. A player who signed up
+   once and kept playing is never misjudged as stale just because their
+   *account* is old; a player who never played at all is the one case
+   where there's also no real score at risk from a wrong call.
+
+3. **How I knew it was right:** I ran the derivation against the real local
+   `.data/app.db` (203 players, 92 games) before trusting it, and separately
+   confirmed on a disposable copy that a stale-but-still-top-30 player
+   survives a near-zero cutoff — the leaderboard-membership guard (below)
+   overriding a 90-day-old timestamp was the case most likely to go wrong
+   silently, so it's the one I checked by hand rather than by reading the
+   SQL and assuming it was right.
+
+### Moment: a hard safety net beyond the activity rule itself
+
+1. **What happened:** A 90-day inactivity rule alone can still delete a
+   real player's best-ever run if they never came back to play again — rare,
+   but real, and the leaderboard is this project's one piece of player-
+   facing persistent state.
+
+2. **What I did instead of the obvious thing:** The cleanup script computes
+   the same Top 30 ranking `listLeaderboard` uses for the public page and
+   excludes every one of those players from deletion outright, regardless
+   of how stale their last game is. "Still shown on `/leaderboard/` right
+   now" is a harder, more legible guarantee than any time-based heuristic:
+   nothing currently visible to a visitor can be deleted by this script.
+
+3. **How I knew it was right:** dry-run output against the real dataset
+   lists exactly who the top-30 guard protects (e.g. a 90000+/60-day-old
+   personal best) separately from the players actually slated for deletion,
+   so the guard's effect is visible before anything runs, not just asserted.
+
+### Moment: finding a real bug by actually running `--apply`
+
+1. **What happened:** The first `--apply` run against a populated test
+   database failed with `FOREIGN KEY constraint failed`, not the happy path
+   I'd written the script against.
+
+2. **What I did instead of the obvious thing:** Rather than special-case
+   around the error or weaken the delete, I traced it to
+   `rooms.creator_player_id`'s foreign key on `players.id`: `rooms` is only
+   truncated at server boot (`db.ts`'s own comment says so explicitly — a
+   deliberate consequence of room state living in memory, not a bug), so a
+   zombie player who once created a room between restarts still has a live
+   `rooms` row pointing at them. `deletePlayerPermanently` in `src/lib/db.ts`
+   has this exact same latent gap — it isn't new here, this script just hit
+   it first. I added a `DELETE FROM rooms WHERE creator_player_id = ?` into
+   the same per-player transaction, consistent with `db.ts`'s own framing of
+   room metadata as disposable rather than real history.
+
+3. **How I knew it was right:** re-running `--apply` against the same test
+   database succeeded, and a follow-up query confirmed zero orphaned rows in
+   either `games` or `rooms` afterward. I did not fix this by reasoning about
+   the schema in the abstract — I only found it because I ran the apply path
+   for real against data shaped like production (a server that had actually
+   created rooms), rather than trusting the dry-run path alone.
+
+### What actually got built
+
+- `scripts/cleanup-zombie-players.ts`: a standalone maintenance script, not
+  an HTTP route — there is no API for this anywhere in the app, matching
+  `CLAUDE.md`'s "no second write path" rule for player deletion. Opens the
+  SQLite file directly with `better-sqlite3` (deliberately not through
+  `src/lib/db.ts`, which runs a migration and truncates `rooms` as a side
+  effect of being imported at all, and always opens a read-write handle).
+  Defaults to a dry-run preview; `--apply` is required to delete anything,
+  and takes an online `backup()` (WAL-safe, unlike copying the file) before
+  writing.
+- `package.json`: `pnpm cleanup:zombies` runs it via `tsx` (added as a
+  pinned devDependency at the version already resolved transitively through
+  Astro's own toolchain, so no new major dependency was introduced).
+- `src/pages/leaderboard.astro`: a `.filters-note`-styled line under the
+  page's subtitle (same muted, secondary style already used for the active-
+  filters summary) telling players an inactive anonymous account may be
+  cleaned up after 90 days, so the deletion policy isn't a silent backend
+  decision.
+
+### Verification
+
+`pnpm typecheck` (astro check, 0 errors) plus a standalone `tsc --noEmit` of
+the script against the project's own `tsconfig.json` (`astro check` doesn't
+cover `scripts/`), `pnpm test:unit` (91/91) and a full `pnpm build` +
+`test:spec` run (59/59) all pass unchanged. The script itself was exercised
+end to end against disposable copies of real data — never the live
+`.data/app.db`, never anything deployed: dry-run and `--apply` against a 203-
+player/92-game snapshot, and again against a server freshly populated by the
+spec suite's own room/game traffic (to get real `rooms` rows into the test),
+confirming in both cases that the Top-30 guard holds, the pre-delete backup
+is byte-for-byte the prior row count, and no orphaned `games` or `rooms` rows
+remain after a delete.
 
