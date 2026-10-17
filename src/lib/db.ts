@@ -5,6 +5,7 @@ import { type SQL, desc, eq, like, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { ticksToMs } from "../game/validate";
+import { incrementCounter, logEvent } from "./observability";
 import { type Game, type Player, type Room, games, players, rooms } from "./schema";
 
 // One SQLite file is the app's whole persistent state. In production
@@ -22,8 +23,16 @@ export const db = drizzle(client);
 // Migrations run at boot, on whatever machine holds the volume — the
 // recommended shape for SQLite on Fly, where there's no separate machine to
 // run them from. The flow: edit src/lib/schema.ts, `pnpm db:generate`, commit
-// the migration it writes to drizzle/.
-migrate(db, { migrationsFolder: "./drizzle" });
+// the migration it writes to drizzle/. Logged (then rethrown, never
+// swallowed) so a failed migration shows up as a database_error line rather
+// than just a crashed boot with no structured trace of why.
+try {
+  migrate(db, { migrationsFolder: "./drizzle" });
+} catch (error) {
+  logEvent({ event: "database_error", detail: `migration failed: ${error instanceof Error ? error.message : error}` });
+  incrementCounter("databaseErrors");
+  throw error;
+}
 
 // Room *metadata* survives in SQLite (so names stay unique and listable),
 // but a room's live state — its arena, membership, connections — lives only
@@ -54,19 +63,28 @@ export function recordGameResult(input: { playerId: number; score: number; ticks
   const survivalTimeMs = ticksToMs(input.ticks);
   const finishedAt = new Date();
   const startedAt = new Date(finishedAt.getTime() - survivalTimeMs);
-  return db
-    .insert(games)
-    .values({
-      playerId: input.playerId,
-      score: input.score,
-      ticks: input.ticks,
-      survivalTimeMs,
-      startedAt: startedAt.toISOString(),
-      finishedAt: finishedAt.toISOString(),
-      status: "completed",
-    })
-    .returning()
-    .get();
+  try {
+    return db
+      .insert(games)
+      .values({
+        playerId: input.playerId,
+        score: input.score,
+        ticks: input.ticks,
+        survivalTimeMs,
+        startedAt: startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        status: "completed",
+      })
+      .returning()
+      .get();
+  } catch (error) {
+    logEvent({
+      event: "database_error",
+      detail: `recordGameResult: ${error instanceof Error ? error.message : error}`,
+    });
+    incrementCounter("databaseErrors");
+    throw error;
+  }
 }
 
 // Permanently erases a player's anonymous identity: every game row they
@@ -129,6 +147,8 @@ export function createRoom(input: CreateRoomInput): { ok: true; room: Room } | R
     if (error instanceof Error && /UNIQUE constraint failed.*rooms/i.test(error.message)) {
       return { ok: false, reason: "name taken" };
     }
+    logEvent({ event: "database_error", detail: `createRoom: ${error instanceof Error ? error.message : error}` });
+    incrementCounter("databaseErrors");
     throw error;
   }
 }

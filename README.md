@@ -74,6 +74,23 @@ is trusted to assert about itself. Concretely:
   and client-driven exactly as it was, running alongside the arena. (A later
   cleanup has since retired that single-player entry — see "How to play".)
 
+## What "good" means for C10
+
+C10's bar is that a developer — not a player — can tell what the running
+system is doing and diagnose a failure without attaching a debugger: every
+meaningful state transition (a room opening or closing, a player joining,
+eating, getting eliminated, a finished game being persisted, a realtime
+connection dropping or being rejected) writes one structured JSON log line,
+and `GET /api/metrics` answers "how much of each is happening right now"
+without reading the logs at all. See `PROCESS.md`'s C10 entry for why the
+event names (`sse_error`, `room_created`, …) depart from generic
+WebSocket/match terminology in favor of this app's actual transport (SSE)
+and lifecycle (rooms, not matches) — a deliberate adaptation, not a gap.
+This deliberately stops short of a monitoring platform: no per-tick log
+line, no latency tracking, no external log/metrics service — a single Fly
+machine's own stdout and one JSON endpoint are already enough to answer
+every question the brief actually asks.
+
 ## Design decisions
 
 - **Game rules are a pure, framework-independent core** (`src/game/`): no DOM,
@@ -123,12 +140,9 @@ is trusted to assert about itself. Concretely:
 
 ## What is intentionally not implemented yet
 
-- **Observability** (C10): structured logging, metrics, error
-  instrumentation. `/api/health` exists as a first, minimal building block,
-  not a dashboard.
-- **Rooms, matches, or a winner.** The shared arena is continuous and has no
-  "start" or "end" condition — a deliberate scope decision
-  (ADR-001), not a missing feature.
+- **A match winner or a room "end" condition.** A room is continuous for as
+  long as it has Players in it — a deliberate scope decision (ADR-001,
+  carried into the room model by ADR-002), not a missing feature.
 - No accounts, power-ups, chat, spectating, or AI opponents — out of scope
   for the whole final project this early, not just this week.
 
@@ -187,6 +201,7 @@ in memory and only a finished run ever reaches the database.
 | `/api/games` | POST | Validates and persists a finished game: `{ score, ticks }` → `{ ok, game }` or `400 { ok: false, reason }` |
 | `/api/leaderboard` | GET | Top 30 games by score: `{ entries }` |
 | `/api/health` | GET | `{ status: "ok" }` if the database is reachable, `503` otherwise |
+| `/api/metrics` | GET | C10 runtime counters: active connections/rooms/players plus accumulated games-started/finished, food collected, eliminations, SSE disconnects/errors, and database errors |
 | `/api/arena/stream` | GET | Opens the realtime channel (Server-Sent Events): joins the caller into the shared arena and streams one `{ gridSize, food, snakes }` frame per server tick |
 | `/api/arena/input` | POST | A validated direction change for the caller's own snake: `{ direction }` → `{ ok: true }` or `400` |
 | `/api/arena/respawn` | POST | Re-joins the caller as a fresh snake after elimination |

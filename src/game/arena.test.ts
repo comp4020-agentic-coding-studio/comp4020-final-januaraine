@@ -246,7 +246,7 @@ describe("tickArena", () => {
       [{ x: 5, y: 5, source: "spawn" }],
     );
 
-    const { state: next } = tickArena(state, () => 0.9);
+    const { state: next, eaten } = tickArena(state, () => 0.9);
     expect(next.snakes[1].segments).toHaveLength(2);
     expect(next.snakes[1].score).toBe(POINTS_PER_FOOD);
     expect(next.food).toHaveLength(1);
@@ -255,6 +255,8 @@ describe("tickArena", () => {
     // The other player's score/length are untouched by someone else's food.
     expect(next.snakes[2].score).toBe(0);
     expect(next.snakes[2].segments).toHaveLength(1);
+    // Attributed to the player who actually ate it, not the other snake.
+    expect(eaten).toEqual([{ playerId: 1, source: "spawn" }]);
   });
 
   it("leaves food in place when only a head-to-head collision reaches it", () => {
@@ -268,8 +270,10 @@ describe("tickArena", () => {
       [{ x: 5, y: 5, source: "spawn" }],
     );
 
-    const { state: next } = tickArena(state, fixedRandom);
+    const { state: next, eaten } = tickArena(state, fixedRandom);
     expect(next.food).toEqual([{ x: 5, y: 5, source: "spawn" }]);
+    // Nobody survived to eat it, so nothing is attributed.
+    expect(eaten).toEqual([]);
   });
 });
 

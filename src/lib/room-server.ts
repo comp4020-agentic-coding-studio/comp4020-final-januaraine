@@ -19,6 +19,7 @@ import {
 import { isDirection } from "../game/types";
 import { validateGameResult } from "../game/validate";
 import { createRoom, deleteRoom, recordGameResult } from "./db";
+import { incrementCounter, logEvent } from "./observability";
 
 // Overridable so spec/rooms.test.ts doesn't have to wait out a real-world
 // grace window to prove the disconnect and room-closure rules.
@@ -173,6 +174,10 @@ export function createRoomAndJoinCreator(input: {
   runtime.arena = joinArena(runtime.arena, input.creatorPlayerId, input.creatorDisplayName);
   rooms.set(runtime.id, runtime);
 
+  logEvent({ event: "room_created", roomId: runtime.id, creatorPlayerId: input.creatorPlayerId });
+  logEvent({ event: "player_joined_room", roomId: runtime.id, playerId: input.creatorPlayerId, role: "player" });
+  incrementCounter("gamesStarted");
+
   return { ok: true, roomId: runtime.id };
 }
 
@@ -233,6 +238,9 @@ export function joinRoom(
   }
   runtime.arena = role === "player" ? joinArena(runtime.arena, playerId, displayName) : leaveArena(runtime.arena, playerId);
 
+  logEvent({ event: "player_joined_room", roomId, playerId, role });
+  if (role === "player") incrementCounter("gamesStarted");
+
   // A role switch (unlike a brand-new join) can be the one that drops the
   // room to zero Players — e.g. its last Player switching to Viewer here
   // instead of through becomeViewer below. See ADR-004: closing applies to
@@ -260,6 +268,8 @@ export const becomePlayer = (roomId: number, playerId: number, displayName: stri
 
   member.role = "player";
   runtime.arena = joinArena(runtime.arena, playerId, displayName);
+  logEvent({ event: "player_joined_room", roomId, playerId, role: "player" });
+  incrementCounter("gamesStarted");
   return { ok: true };
 };
 
@@ -277,6 +287,7 @@ export function becomeViewer(roomId: number, playerId: number): JoinResult {
 
   member.role = "viewer";
   runtime.arena = leaveArena(runtime.arena, playerId);
+  logEvent({ event: "player_joined_room", roomId, playerId, role: "viewer" });
   closeRoomIfNoPlayersLeft(runtime);
   return { ok: true };
 }
@@ -304,6 +315,8 @@ export function leaveRoom(roomId: number, playerId: number): void {
     clearTimeout(timer);
     runtime.disconnectTimers.delete(playerId);
   }
+
+  logEvent({ event: "player_left_room", roomId, playerId });
 
   if (closeRoomIfNoPlayersLeft(runtime)) return;
   broadcastRoom(runtime);
@@ -352,6 +365,8 @@ function closeRoom(roomId: number, reason: string): void {
   }
   if (runtime.tickTimer) clearInterval(runtime.tickTimer);
   for (const timer of runtime.disconnectTimers.values()) clearTimeout(timer);
+
+  logEvent({ event: "room_closed", roomId, reason });
 
   rooms.delete(roomId);
   deleteRoom(roomId);
@@ -420,12 +435,42 @@ function stopTickLoopIfIdle(runtime: RoomRuntime): void {
 }
 
 function runTick(runtime: RoomRuntime): void {
-  const { state: next, eliminated } = tickArena(runtime.arena);
+  const { state: next, eliminated, eaten } = tickArena(runtime.arena);
   runtime.arena = next;
 
+  for (const item of eaten) {
+    logEvent({ event: "food_collected", roomId: runtime.id, playerId: item.playerId, source: item.source });
+    incrementCounter("foodCollected");
+  }
+
   for (const result of eliminated) {
-    if (!validateGameResult({ score: result.score, ticks: result.ticks }).ok) continue;
+    logEvent({
+      event: "player_eliminated",
+      roomId: runtime.id,
+      playerId: result.playerId,
+      reason: result.reason,
+      score: result.score,
+      ticks: result.ticks,
+    });
+    incrementCounter("playerEliminations");
+
+    if (!validateGameResult({ score: result.score, ticks: result.ticks }).ok) {
+      logEvent({
+        event: "database_error",
+        detail: `room ${runtime.id} player ${result.playerId}: server-computed result failed validation (score=${result.score}, ticks=${result.ticks})`,
+      });
+      incrementCounter("databaseErrors");
+      continue;
+    }
     recordGameResult({ playerId: result.playerId, score: result.score, ticks: result.ticks });
+    logEvent({
+      event: "game_finished",
+      roomId: runtime.id,
+      playerId: result.playerId,
+      score: result.score,
+      ticks: result.ticks,
+    });
+    incrementCounter("gamesFinished");
   }
 
   broadcastRoom(runtime);
@@ -465,6 +510,8 @@ export function registerRoomConnection(
 
   controller.enqueue(frameFor(runtime, playerId));
 
+  logEvent({ event: "player_connected", roomId, playerId });
+
   return { ok: true, connectionId };
 }
 
@@ -495,6 +542,8 @@ export function unregisterRoomConnection(connectionId: number): void {
         runtime.disconnectTimers.delete(connection.playerId);
         runtime.members.delete(connection.playerId);
         runtime.arena = leaveArena(runtime.arena, connection.playerId);
+        logEvent({ event: "player_disconnected", roomId: runtime.id, playerId: connection.playerId });
+        incrementCounter("sseDisconnects");
         if (closeRoomIfNoPlayersLeft(runtime)) return;
         broadcastRoom(runtime);
         stopTickLoopIfIdle(runtime);
@@ -522,6 +571,7 @@ export function requestRoomRespawn(roomId: number, playerId: number, displayName
   const member = runtime.members.get(playerId);
   if (!member || member.role !== "player") return { ok: false, reason: "not a player in this room" };
   runtime.arena = joinArena(runtime.arena, playerId, displayName);
+  incrementCounter("gamesStarted");
   return { ok: true };
 }
 
@@ -536,4 +586,23 @@ export function getMemberRole(roomId: number, playerId: number): MemberRole | nu
 
 export function roomRuntimeExists(roomId: number): boolean {
   return rooms.has(roomId);
+}
+
+// Gauges for /api/metrics (see pages/api/metrics.ts) — computed on read from
+// the live registry rather than tracked as separate counters, since the
+// registry is already the source of truth for all three.
+export function activeRoomCount(): number {
+  return rooms.size;
+}
+
+export function totalActivePlayerCount(): number {
+  let count = 0;
+  for (const runtime of rooms.values()) count += playerCount(runtime);
+  return count;
+}
+
+export function totalActiveConnectionCount(): number {
+  let count = 0;
+  for (const runtime of rooms.values()) count += runtime.connections.size;
+  return count;
 }

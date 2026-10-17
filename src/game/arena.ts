@@ -60,9 +60,18 @@ export interface EliminatedPlayer {
   readonly reason: EliminationReason;
 }
 
+// Which player ate which food item this tick, purely for C10's
+// player-attributed `food_collected` logging — the arena's own state
+// transition above never needs "who," only "which index."
+export interface EatenFood {
+  readonly playerId: number;
+  readonly source: FoodSource;
+}
+
 export interface ArenaTickResult {
   readonly state: ArenaState;
   readonly eliminated: readonly EliminatedPlayer[];
+  readonly eaten: readonly EatenFood[];
 }
 
 // The wire shape clients actually receive: no raw playerId, the same
@@ -183,7 +192,7 @@ export function setArenaDirection(state: ArenaState, playerId: number, direction
 export function tickArena(state: ArenaState, random: RandomSource = Math.random): ArenaTickResult {
   const entries = Object.values(state.snakes);
   if (entries.length === 0 && state.dying.length === 0) {
-    return { state, eliminated: [] };
+    return { state, eliminated: [], eaten: [] };
   }
 
   const resolvedDirection = new Map<number, Direction>();
@@ -237,12 +246,18 @@ export function tickArena(state: ArenaState, random: RandomSource = Math.random)
   // since nobody lived to eat it. Removed highest-index-first so earlier
   // indices stay valid mid-removal. Eating either source grows/scores the
   // same; only a consumed "spawn" item ever gets replaced (death food is
-  // one-shot, see the FoodSource comment above).
+  // one-shot, see the FoodSource comment above). `eaten` is purely
+  // observational (who ate what, for C10's logging) and has no bearing on
+  // the arena's own state transition below.
   let food: FoodItem[] = [...state.food];
-  const consumedDesc = entries
-    .filter((s) => !eliminatedReason.has(s.playerId) && ateIndex.get(s.playerId)! !== -1)
-    .map((s) => ateIndex.get(s.playerId)!)
-    .sort((a, b) => b - a);
+  const consumedEntries = entries.filter(
+    (s) => !eliminatedReason.has(s.playerId) && ateIndex.get(s.playerId)! !== -1,
+  );
+  const eaten: EatenFood[] = consumedEntries.map((s) => ({
+    playerId: s.playerId,
+    source: state.food[ateIndex.get(s.playerId)!].source,
+  }));
+  const consumedDesc = consumedEntries.map((s) => ateIndex.get(s.playerId)!).sort((a, b) => b - a);
   let spawnReplacementsNeeded = 0;
   for (const idx of consumedDesc) {
     if (food[idx].source === "spawn") spawnReplacementsNeeded++;
@@ -327,6 +342,7 @@ export function tickArena(state: ArenaState, random: RandomSource = Math.random)
   return {
     state: { snakes, dying: [...stillDying, ...newlyDying], food, gridSize: state.gridSize },
     eliminated,
+    eaten,
   };
 }
 

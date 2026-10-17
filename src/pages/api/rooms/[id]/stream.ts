@@ -1,4 +1,5 @@
 import type { APIRoute } from "astro";
+import { incrementCounter, logEvent } from "../../../../lib/observability";
 import { registerRoomConnection, unregisterRoomConnection } from "../../../../lib/room-server";
 import { getOrCreatePlayer } from "../../../../lib/session";
 
@@ -23,6 +24,8 @@ export const GET: APIRoute = ({ params, request, cookies }) => {
       const result = registerRoomConnection(roomId, player.id, controller);
       if (!result.ok || result.connectionId === undefined) {
         rejected = result.reason ?? "unable to join room stream";
+        logEvent({ event: "sse_error", roomId, detail: rejected });
+        incrementCounter("sseErrors");
         // A custom event name, not "error" — the EventSource-reserved
         // "error" event is for transport-level failures (no `.data`), and
         // conflating the two makes the client's handler fragile.
