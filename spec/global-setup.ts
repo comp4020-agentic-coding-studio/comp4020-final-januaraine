@@ -1,4 +1,5 @@
 import type { TestProject } from "vitest/node";
+import { assertSafeSpecTarget } from "../scripts/spec-safety";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -13,6 +14,13 @@ declare module "vitest" {
 // up to a minute, since some stacks take a while to boot or migrate.
 export default async function setup(project: TestProject): Promise<void> {
   const baseUrl = process.env.APP_URL ?? "http://localhost:8080";
+
+  // Every spec/*.test.ts creates rooms, joins players, and otherwise writes
+  // to whatever baseUrl points at — fine against a disposable local/CI
+  // instance, destructive against a real deployment. This is the one place
+  // that resolution happens for the whole suite, so it's the one place that
+  // needs to refuse an unsafe target (see scripts/spec-safety.ts).
+  assertSafeSpecTarget(baseUrl);
 
   for (let attempt = 0; ; attempt++) {
     try {

@@ -240,7 +240,15 @@ pnpm test:spec    # integration tests against a RUNNING app (spec/*.test.ts)
 `test:spec` needs something answering at `APP_URL` (default
 `http://localhost:8080`) — run the built app (`pnpm build && pnpm preview`,
 or the Docker image) before calling it directly; `pnpm check` already does
-`test:unit` first regardless of whether a server is up. `spec/rooms.test.ts`
+`test:unit` first regardless of whether a server is up. `spec/*.test.ts`
+creates rooms, joins players, and otherwise writes to whatever `APP_URL`
+points at, so `spec/global-setup.ts` refuses to run against anything but a
+recognized local hostname (`localhost`, `127.0.0.1`, `[::1]`, `0.0.0.0`) —
+setting `APP_URL` to a real deployment fails fast with an error instead of
+mutating it. The one escape hatch is `COMP4020_ALLOW_REMOTE_SPEC=1`, which
+prints a loud warning and lets the run proceed; never set it in a script or
+CI, only by hand when you deliberately mean to test a non-local target.
+`spec/rooms.test.ts`
 exercises real disconnect/reconnect timing against `ARENA_DISCONNECT_GRACE_MS`
 (production default: 5s, picked to outlast a browser `EventSource`'s own
 ~3s auto-reconnect delay); set it to something short (e.g. `400`) on
