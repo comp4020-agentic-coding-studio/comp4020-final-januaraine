@@ -138,6 +138,66 @@ describe("lobby search", () => {
   });
 });
 
+// Regression test for the "lobby preview only appears after a manual
+// refresh" bug: the client used to compute a `preview=<ids>` query param
+// once, from whatever rooms it already knew about at connection-open time,
+// and never touched it again — so a room created after the lobby's
+// EventSource was already open could never get a preview until the whole
+// connection was reopened (e.g. an F5). The fix removes that param
+// entirely: the server now derives which rooms to preview from the same
+// room list it recomputes every push (see stream.ts), so there is no
+// client-held id list left to go stale.
+describe("lobby preview: no client-held id list to go stale", () => {
+  it("never sends a preview= param — the server decides which rooms to preview on every push, not the client once", () => {
+    const refs = buildRefs();
+    const stop = initLobby(refs);
+
+    const latest = FakeEventSource.instances.at(-1)!;
+    expect(latest.url).not.toContain("preview=");
+    stop();
+  });
+
+  it("still sends no preview= param even once rooms are already known on screen", () => {
+    // Before the fix, this is exactly the case that got baked into the URL
+    // once and then never updated: a room visible at connection-open time.
+    const refs = buildRefs([baseRoom({ id: 7, locked: false, allowViewers: true })]);
+    const stop = initLobby(refs);
+
+    const latest = FakeEventSource.instances.at(-1)!;
+    expect(latest.url).not.toContain("preview=");
+    stop();
+  });
+
+  it("renders a room's preview from a later frame without reopening the connection — the exact previously-broken lifecycle", () => {
+    const refs = buildRefs();
+    const stop = initLobby(refs);
+    const streamCountAfterOpen = FakeEventSource.instances.length;
+
+    const source = FakeEventSource.instances.at(-1)!;
+    // First frame: no rooms exist yet (the lobby loaded before anyone
+    // created one) — exactly the reported repro's starting state.
+    source.onmessage?.({ data: JSON.stringify({ rooms: [], previews: {} }) } as MessageEvent);
+    expect(refs.listEl.children).toHaveLength(0);
+
+    // A room is created and starts ticking *after* this connection already
+    // opened. The server's next push now includes both the room summary and
+    // its preview in the SAME frame, on the SAME still-open connection — no
+    // second EventSource, which is exactly what the bug used to require.
+    const newRoom = baseRoom({ id: 42, locked: false, allowViewers: true });
+    source.onmessage?.({
+      data: JSON.stringify({
+        rooms: [newRoom],
+        previews: { 42: { gridSize: 20, food: [], snakes: [{ displayName: "P", segments: [{ x: 1, y: 1 }], score: 0, isMine: false }], dying: [] } },
+      }),
+    } as MessageEvent);
+
+    expect(FakeEventSource.instances.length).toBe(streamCountAfterOpen); // no reopen happened
+    const canvas = refs.listEl.querySelector("canvas");
+    expect(canvas).not.toBeNull();
+    stop();
+  });
+});
+
 function baseRoom(overrides: Partial<RoomSummary> = {}): RoomSummary {
   return {
     id: 1,

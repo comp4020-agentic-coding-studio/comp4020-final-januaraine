@@ -42,17 +42,18 @@ export function initLobby(refs: LobbyRefs): () => void {
   let source: EventSource | null = null;
   let latestRooms: RoomSummary[] = [...refs.initialRooms];
 
-  function roomIdsOnScreen(): number[] {
-    return latestRooms.filter((r) => !r.locked && r.allowViewers).map((r) => r.id);
-  }
-
+  // No `preview=<ids>` param: the server derives which rooms to preview from
+  // the exact same search+page result it computes fresh on every push (see
+  // stream.ts), so a room created after this connection is already open
+  // still gets a preview on the very next push, with no need to reopen the
+  // EventSource. Only `q`/`page` select which *rooms* this connection
+  // watches at all; previewing is then "every one of those," not a second,
+  // separately-stale list.
   function openStream(): void {
     source?.close();
     const params = new URLSearchParams();
     if (search) params.set("q", search);
     params.set("page", String(page));
-    const previewIds = roomIdsOnScreen();
-    if (previewIds.length > 0) params.set("preview", previewIds.join(","));
 
     source = new EventSource(`/api/rooms/stream?${params.toString()}`);
     source.onmessage = (event: MessageEvent<string>) => {

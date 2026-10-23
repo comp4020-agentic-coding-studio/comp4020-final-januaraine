@@ -10,26 +10,25 @@ const PAGE_SIZE = 20;
 // exist or how many are being previewed at once.
 const LOBBY_PUSH_MS = 400;
 
-function parsePreviewIds(raw: string | null): number[] {
-  if (!raw) return [];
-  return raw
-    .split(",")
-    .map((part) => Number(part))
-    .filter((id) => Number.isInteger(id) && id > 0);
-}
-
 // The lobby's live feed: room cards (name, counts, locked/allowViewers) for
-// the current search+page, plus a miniature preview for whichever room ids
-// the client says are currently visible on screen (`preview`, a page's worth
-// at most — the client reopens this connection, a fresh EventSource, whenever
-// the visible set changes, since that's only meaningful at connection-open
-// time). Authorization for previews is enforced in room-server.ts's
-// getRoomPreview, not here — requesting a locked or viewer-disabled room's id
-// simply never gets a preview back, whatever the UI happens to hide.
+// the current search+page, plus a miniature preview for every one of *those
+// same* room ids — recomputed from `rows` fresh on every push, not from a
+// client-supplied id list captured once at connection-open time. That's
+// deliberate: a room created after this connection already opened still
+// shows up in the next `rows` fetch (the query itself re-runs every tick),
+// so deriving previews from `rows` right here means a brand-new room's
+// preview appears on this same, still-open connection the very next push —
+// no second request, no reopened EventSource, nothing to go stale. The
+// earlier design instead took a one-time `preview=<ids>` query param from the
+// client and held onto it for the life of the connection, which meant a room
+// created after the page loaded could appear in the room list but never get
+// a preview until the client reopened the stream (e.g. a full reload).
+// Authorization is still enforced in room-server.ts's getRoomPreview, not
+// here — a locked or viewer-disabled room's id simply never gets a preview
+// back, whatever the UI happens to hide.
 export const GET: APIRoute = ({ url, cookies }) => {
   const search = url.searchParams.get("q")?.trim().slice(0, 40) || undefined;
   const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
-  const previewIds = parsePreviewIds(url.searchParams.get("preview"));
   const player = getOrCreatePlayer(cookies);
 
   const encoder = new TextEncoder();
@@ -44,9 +43,9 @@ export const GET: APIRoute = ({ url, cookies }) => {
           .filter((summary): summary is RoomSummary => summary !== null);
 
         const previews: Record<number, ReturnType<typeof getRoomPreview>> = {};
-        for (const id of previewIds) {
-          const preview = getRoomPreview(id);
-          if (preview) previews[id] = preview;
+        for (const row of rows) {
+          const preview = getRoomPreview(row.id);
+          if (preview) previews[row.id] = preview;
         }
 
         try {

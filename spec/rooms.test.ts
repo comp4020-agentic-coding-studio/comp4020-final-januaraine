@@ -376,6 +376,47 @@ describe("lobby preview authorization", () => {
     expect(Object.keys(frame!.previews)).not.toContain(String(locked.roomId));
     expect(Object.keys(frame!.previews)).not.toContain(String(noViewers.roomId));
   });
+
+  // Regression test for the "lobby preview only appears after a manual
+  // refresh" bug: a room created (and started ticking) *after* the lobby's
+  // own stream connection was already open used to never get a preview on
+  // that connection, because the server captured which ids to preview once,
+  // from the client's `preview=` query param at connection-open time, and
+  // never looked at it again. The fix makes the server derive previewable
+  // ids from the same room-list query it already reruns every push, so a
+  // room that becomes visible later is previewed on the very next push —
+  // no reopened connection required. This test opens the lobby stream
+  // *before* the room exists at all, exactly the reported lifecycle.
+  it("previews a room on the lobby's already-open stream even though the room didn't exist when that stream opened", async () => {
+    const roomName = uniqueRoomName("Late Preview");
+    const lobbyStream = await openSSE<{ rooms: { id: number }[]; previews: Record<string, unknown> }>(
+      new URL(`/api/rooms/stream?q=${encodeURIComponent(roomName)}`, baseUrl),
+      await newPlayerCookie(),
+    );
+
+    // Confirm the stream is alive and, as expected, sees nothing yet — the
+    // room this test is about to create doesn't exist until after this.
+    const beforeCreation = await lobbyStream.read(() => true, 1000);
+    expect(beforeCreation.rooms).toEqual([]);
+
+    // Now create the room and open its own gameplay stream (what actually
+    // starts its tick loop) — all *after* the lobby stream above opened.
+    const playerCookie = await newPlayerCookie();
+    const created = await createRoomAs(playerCookie, roomName);
+    const roomId = created.roomId!;
+    const roomStream = await openRoomStream(playerCookie, roomId);
+    await roomStream.read((f) => f.arena.snakes.some((s) => s.isMine)); // confirm it's actually ticking
+
+    // The lobby's stream is still the exact same connection from before —
+    // never closed, never reopened. Its next push must include both the
+    // room card and a live preview for it.
+    const afterCreation = await lobbyStream.read((f) => f.rooms.some((r) => r.id === roomId), 2000);
+    expect(afterCreation.rooms.some((r) => r.id === roomId)).toBe(true);
+    expect(Object.keys(afterCreation.previews)).toContain(String(roomId));
+
+    roomStream.close();
+    lobbyStream.close();
+  });
 });
 
 describe("viewer-to-player switching", () => {
