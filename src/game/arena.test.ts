@@ -23,6 +23,7 @@ function snake(overrides: Partial<ArenaSnake> & Pick<ArenaSnake, "playerId" | "s
     displayName: `Player ${overrides.playerId}`,
     direction: "right",
     pendingDirection: "right",
+    queuedDirection: null,
     score: 0,
     ticks: 0,
     ...overrides,
@@ -152,6 +153,32 @@ describe("setArenaDirection", () => {
     const state = createArena(10, fixedRandom);
     expect(setArenaDirection(state, 999, "up")).toBe(state);
   });
+
+  it("queues a second turn made before the first has applied, instead of discarding it", () => {
+    const state = arena([snake({ playerId: 1, segments: [{ x: 5, y: 5 }], direction: "right" })]);
+
+    // First turn this tick window: takes the empty pendingDirection slot,
+    // exactly as before this queue existed.
+    const afterFirst = setArenaDirection(state, 1, "up");
+    expect(afterFirst.snakes[1].pendingDirection).toBe("up");
+    expect(afterFirst.snakes[1].queuedDirection).toBeNull();
+
+    // Second turn before the next tick: the pending slot is already holding
+    // an unapplied turn, so this one queues behind it instead of silently
+    // overwriting — the bug this fix targets.
+    const afterSecond = setArenaDirection(afterFirst, 1, "left");
+    expect(afterSecond.snakes[1].pendingDirection).toBe("up"); // first turn preserved
+    expect(afterSecond.snakes[1].queuedDirection).toBe("left"); // second turn held, not lost
+  });
+
+  it("a third turn before either applies replaces the queued one, not the already-pending one", () => {
+    const state = arena([snake({ playerId: 1, segments: [{ x: 5, y: 5 }], direction: "right" })]);
+    const queued = setArenaDirection(setArenaDirection(state, 1, "up"), 1, "left");
+
+    const third = setArenaDirection(queued, 1, "down");
+    expect(third.snakes[1].pendingDirection).toBe("up");
+    expect(third.snakes[1].queuedDirection).toBe("down");
+  });
 });
 
 describe("tickArena", () => {
@@ -274,6 +301,57 @@ describe("tickArena", () => {
     expect(next.food).toEqual([{ x: 5, y: 5, source: "spawn" }]);
     // Nobody survived to eat it, so nothing is attributed.
     expect(eaten).toEqual([]);
+  });
+
+  it("applies a queued turn on the tick after the one ahead of it, instead of losing it", () => {
+    // Two turns made in quick succession before either has had a tick to
+    // apply: up (takes the pending slot), then left (queues behind it) —
+    // exactly setArenaDirection's own queuing test, but now observed through
+    // tickArena to confirm the queued turn actually takes effect later
+    // rather than just sitting in state forever.
+    const queued = setArenaDirection(
+      setArenaDirection(arena([snake({ playerId: 1, segments: [{ x: 5, y: 5 }], direction: "right" })]), 1, "up"),
+      1,
+      "left",
+    );
+
+    const firstTick = tickArena(queued, fixedRandom);
+    // First tick applies the already-pending "up" turn, exactly as it would
+    // have without any queued turn behind it.
+    expect(firstTick.state.snakes[1].segments[0]).toEqual({ x: 5, y: 4 });
+    expect(firstTick.state.snakes[1].direction).toBe("up");
+    // The queued "left" turn has been promoted into the now-empty pending
+    // slot, ready to apply on the very next tick.
+    expect(firstTick.state.snakes[1].pendingDirection).toBe("left");
+    expect(firstTick.state.snakes[1].queuedDirection).toBeNull();
+
+    const secondTick = tickArena(firstTick.state, fixedRandom);
+    // Second tick applies the promoted "left" turn — the input from before
+    // the first tick was never lost, just delayed by exactly one tick.
+    expect(secondTick.state.snakes[1].segments[0]).toEqual({ x: 4, y: 4 });
+    expect(secondTick.state.snakes[1].direction).toBe("left");
+  });
+
+  it("rejects a queued turn that would reverse into the snake's new direction, falling back to it", () => {
+    // Queued turn "down" is a direct reversal of the pending "up" turn it's
+    // promoted behind — isValidDirectionChange must re-check it against the
+    // direction the snake will actually be facing when it applies, the same
+    // rule an ordinary (non-queued) pendingDirection is already held to.
+    const queued = setArenaDirection(
+      setArenaDirection(arena([snake({ playerId: 1, segments: [{ x: 5, y: 5 }], direction: "right" })]), 1, "up"),
+      1,
+      "down",
+    );
+
+    const firstTick = tickArena(queued, fixedRandom);
+    expect(firstTick.state.snakes[1].direction).toBe("up");
+    expect(firstTick.state.snakes[1].pendingDirection).toBe("down");
+
+    const secondTick = tickArena(firstTick.state, fixedRandom);
+    // "down" is a reversal of "up", so it's rejected and the snake keeps
+    // heading up — it does not reverse into its own neck.
+    expect(secondTick.state.snakes[1].direction).toBe("up");
+    expect(secondTick.state.snakes[1].segments[0]).toEqual({ x: 5, y: 3 });
   });
 });
 

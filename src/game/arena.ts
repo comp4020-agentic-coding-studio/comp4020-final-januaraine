@@ -16,6 +16,12 @@ export interface ArenaSnake {
   readonly segments: readonly Point[]; // head first
   readonly direction: Direction;
   readonly pendingDirection: Direction;
+  // A second queued turn, held for the tick *after* pendingDirection applies
+  // — see setArenaDirection. One slot is enough: a player can only react to
+  // what's on screen, and what's on screen only changes once per tick, so
+  // there's never a legitimate third turn to hold onto before the first two
+  // have had a chance to apply.
+  readonly queuedDirection: Direction | null;
   readonly score: number;
   readonly ticks: number; // ticks survived since this snake joined/respawned
 }
@@ -158,6 +164,7 @@ export function joinArena(
     segments: [spawn],
     direction,
     pendingDirection: direction,
+    queuedDirection: null,
     score: 0,
     ticks: 0,
   };
@@ -174,10 +181,26 @@ export function leaveArena(state: ArenaState, playerId: number): ArenaState {
 // Same queue-don't-mutate rule as rules.ts's setDirection, just keyed by
 // which player's snake it applies to — one player's input can never affect
 // another's pendingDirection.
+//
+// pendingDirection === direction means no turn is currently queued for the
+// next tick, so a fresh input takes that slot immediately — the original,
+// unchanged behaviour for an ordinary single keypress between ticks. If a
+// turn is already queued (pendingDirection !== direction), a second input
+// before the next tick would otherwise just overwrite the first and the
+// player's first turn would silently vanish — exactly the input loss this
+// one-deep queuedDirection slot exists to prevent. A third input before
+// either applies still only has one slot to land in, so it replaces
+// queuedDirection the same way the pre-queue code always replaced
+// pendingDirection — last-write-wins never applies to more than the single
+// most-recent not-yet-applied turn.
 export function setArenaDirection(state: ArenaState, playerId: number, direction: Direction): ArenaState {
   const snake = state.snakes[playerId];
   if (!snake) return state;
-  return { ...state, snakes: { ...state.snakes, [playerId]: { ...snake, pendingDirection: direction } } };
+
+  if (snake.pendingDirection === snake.direction) {
+    return { ...state, snakes: { ...state.snakes, [playerId]: { ...snake, pendingDirection: direction } } };
+  }
+  return { ...state, snakes: { ...state.snakes, [playerId]: { ...snake, queuedDirection: direction } } };
 }
 
 // The one authoritative step, run once per server tick for every snake at
@@ -329,11 +352,17 @@ export function tickArena(state: ArenaState, random: RandomSource = Math.random)
     }
     const direction = resolvedDirection.get(snake.playerId)!;
     const grew = ateIndex.get(snake.playerId)! !== -1;
+    // The turn just applied frees up the pending slot — promote whatever
+    // was queued behind it (if anything) into that slot so it's ready to
+    // apply next tick, re-validated then against this tick's new `direction`
+    // exactly like any other pendingDirection. No queued turn just means
+    // "nothing changes," same as before this queue existed.
     snakes[snake.playerId] = {
       ...snake,
       segments: nextSegments.get(snake.playerId)!,
       direction,
-      pendingDirection: direction,
+      pendingDirection: snake.queuedDirection ?? direction,
+      queuedDirection: null,
       score: grew ? snake.score + POINTS_PER_FOOD : snake.score,
       ticks: snake.ticks + 1,
     };

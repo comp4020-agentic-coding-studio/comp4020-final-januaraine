@@ -30,6 +30,11 @@ export function keyToDirection(key: string): Direction | null {
 // second listener underneath the first.
 export function attachKeyboardControls(onDirection: (direction: Direction) => void): () => void {
   const handler = (event: KeyboardEvent): void => {
+    // A held key auto-repeats keydown at the OS rate (commonly tens of
+    // events/sec) — none of that is a new turn, so forwarding it would just
+    // flood the input endpoint with redundant same-direction requests,
+    // crowding out a genuine second turn queued in the same tick window.
+    if (event.repeat) return;
     const direction = keyToDirection(event.key);
     if (direction === null) return;
     event.preventDefault();
