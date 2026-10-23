@@ -4,7 +4,14 @@
 // board. src/lib/arena-server.ts is the only thing that calls this from
 // outside a test, on a server-side interval, the same way single-player's
 // loop.ts calls rules.ts's tick() from a client-side interval.
-import { POINTS_PER_FOOD, GRID_SIZE, DEATH_FADE_TICKS } from "./config";
+import {
+  POINTS_PER_FOOD,
+  GRID_SIZE,
+  DEATH_FADE_TICKS,
+  DEATH_FOOD_LIFETIME_TICKS,
+  DEATH_FOOD_WARNING_TICKS,
+  MAX_DEATH_FOOD_CELLS,
+} from "./config";
 import { hitsSelf, hitsWall } from "./collision";
 import { eligibleDeathFoodCells, randomEmptyCell, tryRandomEmptyCell } from "./food";
 import { isValidDirectionChange, nextHeadPosition } from "./movement";
@@ -27,14 +34,60 @@ export interface ArenaSnake {
 }
 
 // "spawn" is the one always-present ambient food the classic game has always
-// had — eaten, it's replaced via the existing random-spawn logic. "death" is
-// a one-shot cell left behind by an eliminated snake's body: eaten, it's
-// just gone, no replacement. Both grow/score a snake identically; the tag
-// only ever matters for the replace-or-don't decision in tickArena.
+// had — eaten, it's replaced via the existing random-spawn logic, and it
+// never expires on its own. "death" is a one-shot cell left behind by an
+// eliminated snake's body: eaten, it's just gone, no replacement — and
+// unlike spawn food, it carries its own countdown to automatic removal
+// (ticksRemaining), since nothing else guarantees a death-food cell is ever
+// collected. Both grow/score a snake identically; the discriminant only
+// ever matters for the replace-or-don't and expire-or-don't decisions in
+// tickArena, which is exactly why it's a discriminated union rather than an
+// optional field every caller would otherwise have to guard.
 export type FoodSource = "spawn" | "death";
 
-export interface FoodItem extends Point {
-  readonly source: FoodSource;
+export interface SpawnFoodItem extends Point {
+  readonly source: "spawn";
+}
+
+export interface DeathFoodItem extends Point {
+  readonly source: "death";
+  // Ticks left before this cell is removed uncollected — decremented once
+  // per tick in tickArena, same clock as DEATH_FADE_TICKS. Reaching 0 means
+  // "gone this tick," checked before this tick's own eat resolution so a
+  // cell can never be both eaten and expired on the same tick (see
+  // tickArena's ordering comment).
+  readonly ticksRemaining: number;
+}
+
+export type FoodItem = SpawnFoodItem | DeathFoodItem;
+
+// The client-facing "is this about to disappear" check — the single place
+// the warning threshold lives, so the renderer's blink and this module's own
+// tests agree on exactly when "expiring soon" starts. A type predicate
+// (not a plain boolean) so a caller that checks this first gets
+// ticksRemaining narrowed in, the same as checking `food.source === "death"`
+// directly would.
+export function isFoodExpiring(food: FoodItem): food is DeathFoodItem {
+  return food.source === "death" && food.ticksRemaining <= DEATH_FOOD_WARNING_TICKS;
+}
+
+// Deterministic oldest-first eviction once death-food cells exceed the cap:
+// "oldest" meaning "closest to expiring anyway" (lowest ticksRemaining), so
+// capping rarely removes a cell before its own natural lifetime would have.
+// Spawn food is never touched — the cap only ever bounds death food. Also
+// what keeps a single oversized conversion (one corpse producing more cells
+// than the entire cap allows) within the limit: the newly-added cells start
+// at the same ticksRemaining as each other, so a stable sort (by
+// ticksRemaining, ties broken by array order) evicts from the start of that
+// batch first — deterministic, not cell-position-dependent.
+export function capDeathFood(food: readonly FoodItem[], maxDeathFoodCells: number): FoodItem[] {
+  const death = food.filter((f): f is DeathFoodItem => f.source === "death");
+  if (death.length <= maxDeathFoodCells) return [...food];
+
+  const keepCount = Math.max(0, maxDeathFoodCells);
+  const sortedOldestFirst = [...death].sort((a, b) => a.ticksRemaining - b.ticksRemaining);
+  const evict = new Set(sortedOldestFirst.slice(0, death.length - keepCount));
+  return food.filter((f) => f.source !== "death" || !evict.has(f));
 }
 
 export type EliminationReason = "wall" | "self" | "snake";
@@ -214,13 +267,27 @@ export function setArenaDirection(state: ArenaState, playerId: number, direction
 // animation and for the eventual food conversion below.
 export function tickArena(state: ArenaState, random: RandomSource = Math.random): ArenaTickResult {
   const entries = Object.values(state.snakes);
-  if (entries.length === 0 && state.dying.length === 0) {
+  const hasDeathFood = state.food.some((f) => f.source === "death");
+  // An arena with nobody playing and no fade in progress still has to age
+  // down any leftover death food — otherwise an empty room (every Player
+  // disconnected, nobody left to collect it) would freeze its countdown
+  // forever instead of letting it expire on schedule.
+  if (entries.length === 0 && state.dying.length === 0 && !hasDeathFood) {
     return { state, eliminated: [], eaten: [] };
   }
 
+  // Age and expire death food *before* this tick's eat-check even looks at
+  // it — a cell that hits 0 remaining ticks this tick is simply gone before
+  // any snake's head can land on it, so it can never be both "eaten" and
+  // "expired" on the same tick (the one invariant Phase 3's double-award
+  // test checks). Spawn food never expires, so it passes through untouched.
+  const liveFood: FoodItem[] = state.food
+    .map((f) => (f.source === "death" ? { ...f, ticksRemaining: f.ticksRemaining - 1 } : f))
+    .filter((f) => f.source !== "death" || f.ticksRemaining > 0);
+
   const resolvedDirection = new Map<number, Direction>();
   const newHead = new Map<number, Point>();
-  const ateIndex = new Map<number, number>(); // index into state.food, -1 if none
+  const ateIndex = new Map<number, number>(); // index into liveFood, -1 if none
   const bodyToCheck = new Map<number, readonly Point[]>();
 
   for (const snake of entries) {
@@ -232,7 +299,7 @@ export function tickArena(state: ArenaState, random: RandomSource = Math.random)
     const head = nextHeadPosition(snake.segments[0], direction);
     newHead.set(snake.playerId, head);
 
-    const idx = state.food.findIndex((f) => f.x === head.x && f.y === head.y);
+    const idx = liveFood.findIndex((f) => f.x === head.x && f.y === head.y);
     ateIndex.set(snake.playerId, idx);
     bodyToCheck.set(snake.playerId, idx !== -1 ? snake.segments : snake.segments.slice(0, -1));
   }
@@ -272,13 +339,13 @@ export function tickArena(state: ArenaState, random: RandomSource = Math.random)
   // one-shot, see the FoodSource comment above). `eaten` is purely
   // observational (who ate what, for C10's logging) and has no bearing on
   // the arena's own state transition below.
-  let food: FoodItem[] = [...state.food];
+  let food: FoodItem[] = [...liveFood];
   const consumedEntries = entries.filter(
     (s) => !eliminatedReason.has(s.playerId) && ateIndex.get(s.playerId)! !== -1,
   );
   const eaten: EatenFood[] = consumedEntries.map((s) => ({
     playerId: s.playerId,
-    source: state.food[ateIndex.get(s.playerId)!].source,
+    source: liveFood[ateIndex.get(s.playerId)!].source,
   }));
   const consumedDesc = consumedEntries.map((s) => ateIndex.get(s.playerId)!).sort((a, b) => b - a);
   let spawnReplacementsNeeded = 0;
@@ -311,7 +378,7 @@ export function tickArena(state: ArenaState, random: RandomSource = Math.random)
   const blocked: Point[] = [...food, ...[...nextSegments.values()].flat(), ...stillDying.flatMap((d) => d.segments)];
   for (const dead of expiring) {
     for (const cell of eligibleDeathFoodCells(dead.segments, blocked)) {
-      food.push({ ...cell, source: "death" });
+      food.push({ ...cell, source: "death", ticksRemaining: DEATH_FOOD_LIFETIME_TICKS });
       blocked.push(cell);
     }
   }
@@ -340,6 +407,13 @@ export function tickArena(state: ArenaState, random: RandomSource = Math.random)
     food.push({ ...replacement, source: "spawn" });
     occupiedForSpawn.push(replacement);
   }
+
+  // Enforce the death-food capacity last, after every addition/removal this
+  // tick (expiry, eating, new conversions) has already happened — evicting
+  // against the final count is what keeps this a single bound regardless of
+  // how many of those sources contributed cells this tick, rather than a
+  // partial check that a later step in the same tick could still exceed.
+  food = capDeathFood(food, MAX_DEATH_FOOD_CELLS);
 
   const snakes: Record<number, ArenaSnake> = {};
   const eliminated: EliminatedPlayer[] = [];

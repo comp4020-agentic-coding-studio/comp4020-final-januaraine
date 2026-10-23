@@ -1,4 +1,4 @@
-import type { SerializedArena } from "../game/arena";
+import { isFoodExpiring, type SerializedArena } from "../game/arena";
 
 // The colors a frame is drawn with — read once per draw from the CSS custom
 // properties styles.css defines per theme (see readPalette()), never
@@ -86,11 +86,20 @@ export function renderArena(
 
   ctx.fillStyle = palette.food;
   const foodPad = cellPx * 0.18;
+  const previousFoodAlpha = ctx.globalAlpha;
   for (const food of state.food) {
+    // A death-food cell in its final few seconds blinks — driven entirely by
+    // its own server-authoritative ticksRemaining (even/odd), not a client
+    // timer, so every client blinks it in lockstep and in sync with the only
+    // thing that actually redraws this canvas: the next SSE frame. No
+    // requestAnimationFrame loop, no extra state — the existing once-per-tick
+    // redraw already supplies the "frame" a blink needs.
+    ctx.globalAlpha = isFoodExpiring(food) && food.ticksRemaining % 2 === 0 ? previousFoodAlpha * 0.25 : previousFoodAlpha;
     ctx.beginPath();
     ctx.arc(food.x * cellPx + cellPx / 2, food.y * cellPx + cellPx / 2, cellPx / 2 - foodPad, 0, Math.PI * 2);
     ctx.fill();
   }
+  ctx.globalAlpha = previousFoodAlpha;
 
   let otherIndex = 0;
   for (const snake of state.snakes) {

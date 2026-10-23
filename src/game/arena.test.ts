@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { DEATH_FADE_TICKS, POINTS_PER_FOOD } from "./config";
+import {
+  DEATH_FADE_TICKS,
+  DEATH_FOOD_LIFETIME_TICKS,
+  DEATH_FOOD_WARNING_TICKS,
+  MAX_DEATH_FOOD_CELLS,
+  POINTS_PER_FOOD,
+} from "./config";
 import {
   type ArenaSnake,
   type ArenaState,
   type DyingSnake,
   type FoodItem,
+  capDeathFood,
   createArena,
+  isFoodExpiring,
   joinArena,
   leaveArena,
   serializeArena,
@@ -478,8 +486,8 @@ describe("death fade and body-to-food conversion", () => {
     expect(next.dying).toEqual([]);
     expect(next.food).toEqual(
       expect.arrayContaining([
-        { x: 1, y: 1, source: "death" },
-        { x: 1, y: 2, source: "death" },
+        { x: 1, y: 1, source: "death", ticksRemaining: DEATH_FOOD_LIFETIME_TICKS },
+        { x: 1, y: 2, source: "death", ticksRemaining: DEATH_FOOD_LIFETIME_TICKS },
       ]),
     );
     expect(next.food).toHaveLength(2);
@@ -513,7 +521,7 @@ describe("death fade and body-to-food conversion", () => {
     expect(next.food).toEqual(
       expect.arrayContaining([
         { x: 1, y: 0, source: "spawn" },
-        { x: 3, y: 0, source: "death" },
+        { x: 3, y: 0, source: "death", ticksRemaining: DEATH_FOOD_LIFETIME_TICKS },
       ]),
     );
     expect(next.food).toHaveLength(2);
@@ -546,13 +554,13 @@ describe("death fade and body-to-food conversion", () => {
 
     const { state: next } = tickArena(state, fixedRandom);
     expect(next.dying).toEqual([]);
-    expect(next.food).toEqual([{ x: 2, y: 2, source: "death" }]);
+    expect(next.food).toEqual([{ x: 2, y: 2, source: "death", ticksRemaining: DEATH_FOOD_LIFETIME_TICKS }]);
   });
 
   it("lets a survivor eat death food (grows/scores the same as normal food) without replacing it", () => {
     const state = arena(
       [snake({ playerId: 1, segments: [{ x: 1, y: 1 }], direction: "right", pendingDirection: "right" })],
-      [{ x: 2, y: 1, source: "death" }],
+      [{ x: 2, y: 1, source: "death", ticksRemaining: DEATH_FOOD_LIFETIME_TICKS }],
     );
 
     const { state: next } = tickArena(state, fixedRandom);
@@ -566,18 +574,19 @@ describe("death fade and body-to-food conversion", () => {
       [snake({ playerId: 1, segments: [{ x: 1, y: 1 }], direction: "right", pendingDirection: "right" })],
       [
         { x: 2, y: 1, source: "spawn" },
-        { x: 5, y: 5, source: "death" },
+        { x: 5, y: 5, source: "death", ticksRemaining: DEATH_FOOD_LIFETIME_TICKS },
       ],
     );
 
     const { state: next } = tickArena(state, fixedRandom);
     expect(next.snakes[1].score).toBe(POINTS_PER_FOOD);
-    // Leftover death food survives untouched; a fresh spawn item replaces
-    // the one eaten, landing on the first free cell in scan order once the
-    // snake's new body and the leftover death food are excluded.
+    // Leftover death food survives untouched (just one tick older); a fresh
+    // spawn item replaces the one eaten, landing on the first free cell in
+    // scan order once the snake's new body and the leftover death food are
+    // excluded.
     expect(next.food).toEqual(
       expect.arrayContaining([
-        { x: 5, y: 5, source: "death" },
+        { x: 5, y: 5, source: "death", ticksRemaining: DEATH_FOOD_LIFETIME_TICKS - 1 },
         { x: 0, y: 0, source: "spawn" },
       ]),
     );
@@ -587,7 +596,7 @@ describe("death fade and body-to-food conversion", () => {
   it("goes back to only the ambient spawn food, spawning exactly as before, once all death food from a kill is gone", () => {
     const state = arena(
       [snake({ playerId: 1, segments: [{ x: 1, y: 1 }], direction: "right", pendingDirection: "right" })],
-      [{ x: 2, y: 1, source: "death" }], // the only food left after a kill's other cells were already eaten
+      [{ x: 2, y: 1, source: "death", ticksRemaining: DEATH_FOOD_LIFETIME_TICKS }], // the only food left after a kill's other cells were already eaten
     );
 
     const { state: next } = tickArena(state, fixedRandom);
@@ -621,5 +630,188 @@ describe("death fade and body-to-food conversion", () => {
         { displayName: "P7", segments: [{ x: 1, y: 1 }], reason: "wall", isMine: false, opacity: 2 / DEATH_FADE_TICKS },
       ]);
     });
+  });
+});
+
+describe("death-food lifecycle", () => {
+  it("a freshly converted death-food cell survives a tick with ticks to spare, just one tick older", () => {
+    const state = arena(
+      [],
+      [],
+      10,
+      [dyingSnake({ playerId: 9, segments: [{ x: 4, y: 4 }], ticksRemaining: 1 })], // expires this tick
+    );
+
+    const { state: next } = tickArena(state, fixedRandom);
+    expect(next.food).toEqual([{ x: 4, y: 4, source: "death", ticksRemaining: DEATH_FOOD_LIFETIME_TICKS }]);
+
+    // One ordinary tick later, nothing special happens to it yet — still
+    // present, just a tick closer to expiring.
+    const { state: after } = tickArena(next, fixedRandom);
+    expect(after.food).toEqual([{ x: 4, y: 4, source: "death", ticksRemaining: DEATH_FOOD_LIFETIME_TICKS - 1 }]);
+  });
+
+  it("removes an expired death-food cell automatically, even though nobody ever collected it", () => {
+    const state = arena([], [{ x: 4, y: 4, source: "death", ticksRemaining: 1 }], 10, []);
+
+    const { state: next } = tickArena(state, fixedRandom);
+    expect(next.food).toEqual([]);
+  });
+
+  it("leaves spawn food, live snakes, and dying corpses untouched by a death-food expiry on the same tick", () => {
+    const state = arena(
+      [snake({ playerId: 1, segments: [{ x: 7, y: 7 }], direction: "right", pendingDirection: "right" })],
+      [
+        { x: 0, y: 0, source: "spawn" },
+        { x: 4, y: 4, source: "death", ticksRemaining: 1 }, // expires this tick
+      ],
+      10,
+      [dyingSnake({ playerId: 99, segments: [{ x: 9, y: 9 }], ticksRemaining: 3 })],
+    );
+
+    const { state: next } = tickArena(state, fixedRandom);
+    // Only the expired death-food cell is gone — the spawn item, the live
+    // snake, and the still-fading corpse are all exactly what an ordinary
+    // tick with no death food at all would have produced.
+    expect(next.food).toEqual([{ x: 0, y: 0, source: "spawn" }]);
+    expect(next.snakes[1].segments[0]).toEqual({ x: 8, y: 7 });
+    expect(next.dying).toEqual([{ ...dyingSnake({ playerId: 99, segments: [{ x: 9, y: 9 }] }), ticksRemaining: 2 }]);
+  });
+
+  it("cannot award points twice for one cell — it is either eaten this tick or expired, never both", () => {
+    // Case 1: ticksRemaining is high enough to still be present when the
+    // snake's head lands on it — eaten normally, scored once.
+    const eatenState = arena(
+      [snake({ playerId: 1, segments: [{ x: 3, y: 4 }], direction: "right", pendingDirection: "right" })],
+      [{ x: 4, y: 4, source: "death", ticksRemaining: 2 }],
+    );
+    const { state: eatenNext, eaten } = tickArena(eatenState, fixedRandom);
+    expect(eatenNext.snakes[1].score).toBe(POINTS_PER_FOOD);
+    expect(eaten).toEqual([{ playerId: 1, source: "death" }]);
+    expect(eatenNext.food).toEqual([]); // consumed, not left behind
+
+    // Case 2: ticksRemaining expires on the very tick the same head would
+    // have landed on it — the cell is removed before the eat-check runs, so
+    // the snake gets nothing for it, and nothing is double-counted.
+    const expiredState = arena(
+      [snake({ playerId: 1, segments: [{ x: 3, y: 4 }], direction: "right", pendingDirection: "right" })],
+      [{ x: 4, y: 4, source: "death", ticksRemaining: 1 }],
+    );
+    const { state: expiredNext, eaten: eatenOnExpiry } = tickArena(expiredState, fixedRandom);
+    expect(expiredNext.snakes[1].score).toBe(0);
+    expect(eatenOnExpiry).toEqual([]);
+    expect(expiredNext.food).toEqual([]); // gone either way, but never scored
+  });
+
+  it("isFoodExpiring is true only for death food within the final warning window, never for spawn food", () => {
+    expect(isFoodExpiring({ x: 0, y: 0, source: "spawn" })).toBe(false);
+    expect(isFoodExpiring({ x: 0, y: 0, source: "death", ticksRemaining: DEATH_FOOD_WARNING_TICKS + 1 })).toBe(false);
+    expect(isFoodExpiring({ x: 0, y: 0, source: "death", ticksRemaining: DEATH_FOOD_WARNING_TICKS })).toBe(true);
+    expect(isFoodExpiring({ x: 0, y: 0, source: "death", ticksRemaining: 1 })).toBe(true);
+  });
+
+  describe("capDeathFood", () => {
+    it("leaves food untouched when death-food count is at or under the cap", () => {
+      const food: FoodItem[] = [
+        { x: 0, y: 0, source: "spawn" },
+        { x: 1, y: 1, source: "death", ticksRemaining: 5 },
+        { x: 2, y: 2, source: "death", ticksRemaining: 10 },
+      ];
+      expect(capDeathFood(food, 2)).toEqual(food);
+    });
+
+    it("never evicts spawn food — the cap only ever bounds death-food cells", () => {
+      const food: FoodItem[] = [
+        { x: 0, y: 0, source: "spawn" },
+        { x: 1, y: 1, source: "death", ticksRemaining: 1 },
+        { x: 2, y: 2, source: "death", ticksRemaining: 2 },
+        { x: 3, y: 3, source: "death", ticksRemaining: 3 },
+      ];
+      const capped = capDeathFood(food, 1);
+      expect(capped).toContainEqual({ x: 0, y: 0, source: "spawn" });
+      expect(capped.filter((f) => f.source === "death")).toHaveLength(1);
+    });
+
+    it("evicts the lowest-ticksRemaining (closest to expiring) death-food cells first", () => {
+      const food: FoodItem[] = [
+        { x: 1, y: 1, source: "death", ticksRemaining: 50 },
+        { x: 2, y: 2, source: "death", ticksRemaining: 1 }, // oldest — evicted first
+        { x: 3, y: 3, source: "death", ticksRemaining: 20 },
+      ];
+      const capped = capDeathFood(food, 2);
+      expect(capped).toEqual(
+        expect.arrayContaining([
+          { x: 1, y: 1, source: "death", ticksRemaining: 50 },
+          { x: 3, y: 3, source: "death", ticksRemaining: 20 },
+        ]),
+      );
+      expect(capped).toHaveLength(2);
+    });
+
+    it("never produces more death-food cells than the cap, however many are passed in", () => {
+      const food: FoodItem[] = Array.from({ length: 30 }, (_, i) => ({
+        x: i,
+        y: 0,
+        source: "death" as const,
+        ticksRemaining: i + 1,
+      }));
+      const capped = capDeathFood(food, 10);
+      const deathCells = capped.filter((f): f is Extract<FoodItem, { source: "death" }> => f.source === "death");
+      expect(deathCells).toHaveLength(10);
+      // The 10 kept are exactly the 10 with the highest ticksRemaining (21-30).
+      expect(deathCells.map((f) => f.ticksRemaining).sort((a, b) => a - b)).toEqual(
+        Array.from({ length: 10 }, (_, i) => 21 + i),
+      );
+    });
+
+    it("keeps the result within the cap when a single death's conversion alone would exceed it", () => {
+      // One large corpse's eligible cells all land on the board the same
+      // tick with the same brand-new ticksRemaining — capDeathFood must
+      // still bring the total back under the cap deterministically, not
+      // merely "usually."
+      const hugeCorpseSegments = Array.from({ length: 12 }, (_, i) => ({ x: i, y: 0 }));
+      const state = arena([], [], 20, [
+        dyingSnake({ playerId: 42, segments: hugeCorpseSegments, ticksRemaining: 1 }),
+      ]);
+
+      const { state: next } = tickArena(state, fixedRandom);
+      expect(next.food.length).toBeLessThanOrEqual(MAX_DEATH_FOOD_CELLS);
+      // No duplicate/overlapping cells among whatever survived the cap.
+      const keys = next.food.map((f) => `${f.x},${f.y}`);
+      expect(new Set(keys).size).toBe(keys.length);
+    });
+  });
+
+  it("enforces the cap after a tick's cleanup, regardless of how many sources added cells that same tick", () => {
+    // Already at the cap before this tick; one more corpse's cells convert
+    // on this same tick, pushing the total over — the post-tick count must
+    // still respect MAX_DEATH_FOOD_CELLS.
+    const existingDeathFood: FoodItem[] = Array.from({ length: MAX_DEATH_FOOD_CELLS }, (_, i) => ({
+      x: i % 20,
+      y: Math.floor(i / 20) + 1,
+      source: "death" as const,
+      ticksRemaining: 50,
+    }));
+    const state = arena([], existingDeathFood, 20, [
+      dyingSnake({ playerId: 7, segments: [{ x: 0, y: 19 }], ticksRemaining: 1 }),
+    ]);
+
+    const { state: next } = tickArena(state, fixedRandom);
+    expect(next.food.filter((f) => f.source === "death").length).toBeLessThanOrEqual(MAX_DEATH_FOOD_CELLS);
+  });
+
+  it("gives every client the same authoritative ticksRemaining for a death-food cell, regardless of viewer", () => {
+    const state = arena([], [{ x: 4, y: 4, source: "death", ticksRemaining: 30 }], 10, []);
+
+    const mine = serializeArena(state, 1);
+    const someoneElse = serializeArena(state, 999);
+    const noViewer = serializeArena(state);
+
+    // Food has no isMine concept — every viewer (Player or Viewer role
+    // alike) is handed the exact same array, which is what guarantees the
+    // expiration warning renders in lockstep for everyone in the room.
+    expect(mine.food).toEqual(someoneElse.food);
+    expect(mine.food).toEqual(noViewer.food);
+    expect(mine.food).toEqual([{ x: 4, y: 4, source: "death", ticksRemaining: 30 }]);
   });
 });
