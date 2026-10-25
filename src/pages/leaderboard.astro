@@ -201,6 +201,10 @@ const activeFilters = [
       }
     </main>
     <script>
+      import { initThemeToggle } from "../frontend/theme";
+      initThemeToggle();
+    </script>
+    <script>
       const statusEl = document.getElementById("leaderboard-status")!;
       const deleteButton = document.querySelector<HTMLButtonElement>('[data-action="delete-me"]');
 
