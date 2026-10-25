@@ -68,7 +68,7 @@ is trusted to assert about itself. Concretely:
   (`POST /api/rooms/[id]/input`), never a position or a score
 - a dropped connection and a deliberate elimination are different things
   and behave differently on purpose — see
-  [`docs/decisions/ADR-001-realtime-multiplayer.md`](docs/decisions/ADR-001-realtime-multiplayer.md)
+  [`docs/decisions/ADR-001-realtime-multiplayer.md`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/blob/main/docs/decisions/ADR-001-realtime-multiplayer.md)
   for the reasoning, the alternatives considered, and what this choice costs
 - none of this changed C8's bar at the time: single-player stayed untouched
   and client-driven exactly as it was, running alongside the arena. (A later
@@ -127,11 +127,11 @@ every question the brief actually asks.
   the alternative — a real operational risk, not just a preference.
 - **Rooms, each held entirely in memory, not per-tick writes to SQLite.**
   C9 originally shipped one continuous shared arena
-  ([`docs/decisions/ADR-001-realtime-multiplayer.md`](docs/decisions/ADR-001-realtime-multiplayer.md)),
+  ([`docs/decisions/ADR-001-realtime-multiplayer.md`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/blob/main/docs/decisions/ADR-001-realtime-multiplayer.md)),
   superseded the same week by room-based multiplayer — named/searchable
   rooms with a 5-Player cap, independent lock/viewer settings, and a live
   preview (see
-  [`docs/decisions/ADR-002-room-based-multiplayer.md`](docs/decisions/ADR-002-room-based-multiplayer.md)
+  [`docs/decisions/ADR-002-room-based-multiplayer.md`](https://github.com/comp4020-agentic-coding-studio/comp4020-final-januaraine/blob/main/docs/decisions/ADR-002-room-based-multiplayer.md)
   for why, and ADR-003/ADR-004 for how a room's lifetime is decided). Either
   way, a player's run is only ever persisted through the exact same
   `recordGameResult` path single-player already used, once, when they're
